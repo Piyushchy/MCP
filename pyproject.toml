@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcpgate"
+version = "0.1.0"
+description = "One MCP server that routes to many MCP servers, with search-first tool loading."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Piyush Chaudhary", email = "mail@piyushchy.is-a.dev" }]
+dependencies = ["mcp>=1.27,<2", "tomli-w>=1.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+mcpgate = "mcpgate.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["mcpgate*"]
+
+[tool.setuptools.package-data]
+mcpgate = ["data/**/*.md"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["."]
+testpaths = ["tests"]
