@@ -84,3 +84,37 @@ async def test_http_needs_the_token(demo_cfg):
         srv.should_exit = True
         await asyncio.wait_for(task, 20)
         await hub.stop()
+
+
+async def _status(url, host, token):
+    init = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+        "protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}
+    async with httpx.AsyncClient() as h:
+        r = await h.post(url, json=init, headers={
+            "Host": host, "Authorization": f"Bearer {token}",
+            "Accept": "application/json, text/event-stream", "Content-Type": "application/json"})
+        return r.status_code
+
+
+async def test_allow_host_accepts_a_tunnel_host_header_and_still_rejects_others():
+    sec = serve.transport_security(["box.tail1234.ts.net"])
+    app, hub = server.build(Settings(), transport_security=sec)
+    srv, task, url = await run_server(app, TOKEN)
+    try:
+        assert await _status(url, "box.tail1234.ts.net", TOKEN) == 200
+        assert await _status(url, "evil.example.com", TOKEN) in (400, 421)
+    finally:
+        srv.should_exit = True
+        await asyncio.wait_for(task, 20)
+        await hub.stop()
+
+
+async def test_default_server_rejects_a_foreign_host_header():
+    app, hub = server.build(Settings())
+    srv, task, url = await run_server(app, TOKEN)
+    try:
+        assert await _status(url, "box.tail1234.ts.net", TOKEN) in (400, 421)  # the reason --allow-host exists
+    finally:
+        srv.should_exit = True
+        await asyncio.wait_for(task, 20)
+        await hub.stop()
