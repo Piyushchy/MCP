@@ -113,7 +113,7 @@ class Backend:
                         env={k: expand(v) for k, v in cfg.env.items()},
                         cwd=expand(cfg.cwd) if cfg.cwd else None,
                     )
-                    read, write = await stack.enter_async_context(stdio_client(params, errlog=sys.stderr))
+                    read, write = await stack.enter_async_context(stdio_client(params, errlog=_errlog()))
                 elif cfg.transport == "http":
                     client = await stack.enter_async_context(httpx.AsyncClient(
                         headers={k: expand(v) for k, v in cfg.headers.items()},
@@ -207,6 +207,16 @@ class Backend:
                 await self.stop()
                 raise BackendError(f"{self.name}.{tool}: connection problem ({self.error})") from None
         raise AssertionError("unreachable")
+
+
+def _errlog():
+    """Where a command backend's stderr goes: ours, but only if it is a real file (a captured
+    stream has no file descriptor to hand to a child process). Never stdout: that is the protocol."""
+    try:
+        sys.stderr.fileno()
+        return sys.stderr
+    except (AttributeError, OSError, ValueError):
+        return sys.__stderr__
 
 
 def _describe(e: BaseException) -> str:
