@@ -178,6 +178,25 @@ def cmd_token(args) -> int:
     return 0
 
 
+def _skill_text() -> str:
+    from importlib import resources
+    return resources.files("mcpgate").joinpath("data/skills/mcp-gateway/SKILL.md").read_text()
+
+
+def cmd_skill(args) -> int:
+    if args.action == "show":
+        print(_skill_text(), end="")
+        return 0
+    base = Path(args.dir).expanduser() if args.dir else Path("~/.claude/skills").expanduser()
+    target = base / "mcp-gateway" / "SKILL.md"
+    if target.exists() and not args.force:
+        raise ConfigError(f"{target} already exists (use --force to replace it)")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(_skill_text())
+    print(f"Installed {target}")
+    return 0
+
+
 def cmd_serve(args) -> int:
     from . import serve
     from .server import build
@@ -302,6 +321,11 @@ def parser() -> argparse.ArgumentParser:
     n.add_argument("name")
     n.set_defaults(fn=cmd_new)
     sub.add_parser("token", help="print a new random bearer token").set_defaults(fn=cmd_token)
+    k = sub.add_parser("skill", help="show or install the 'mcp-gateway' skill that teaches a model to use the gateway efficiently")
+    k.add_argument("action", choices=["show", "install"])
+    k.add_argument("--dir", help="skills folder to install into (default: ~/.claude/skills)")
+    k.add_argument("--force", action="store_true")
+    k.set_defaults(fn=cmd_skill)
     d = sub.add_parser("doctor", help="check the config, commands, secrets and connections")
     d.add_argument("--no-connect", action="store_true")
     d.add_argument("--timeout", type=float, default=20.0, help="seconds to wait for each backend to start")
