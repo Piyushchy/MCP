@@ -72,4 +72,10 @@ def die() -> str:
 
 
 if __name__ == "__main__":
-    mcp.run("stdio")
+    # python demo_server.py                      -> stdio
+    # python demo_server.py streamable-http PORT -> HTTP (also: sse)
+    if len(sys.argv) > 2:
+        mcp.settings.port = int(sys.argv[2])
+        mcp.run(sys.argv[1])
+    else:
+        mcp.run("stdio")

@@ -88,3 +88,51 @@ async def test_slow_start_times_out(tmp_path):
     b = Backend(Cfg(name="hang", command=sys.executable, args=[str(script)]), start_timeout=1.5)
     with pytest.raises(BackendError, match="did not start"):
         await b.tools()
+
+
+@pytest.fixture
+def free_port():
+    import socket
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+async def _remote_server(mode, port):
+    from tests.conftest import DEMO
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, DEMO, mode, str(port),
+        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+    for _ in range(100):
+        try:
+            _, w = await asyncio.open_connection("127.0.0.1", port)
+            w.close()
+            return proc
+        except OSError:
+            await asyncio.sleep(0.1)
+    proc.kill()
+    raise TimeoutError("demo server did not open its port")
+
+
+@pytest.mark.parametrize("mode, path, transport", [("streamable-http", "/mcp", "http"), ("sse", "/sse", "sse")])
+async def test_remote_backends_over_http_and_sse(free_port, mode, path, transport, monkeypatch):
+    monkeypatch.setenv("HOST_PORT", str(free_port))
+    proc = await _remote_server(mode, free_port)
+    b = Backend(Cfg(name="remote", transport=transport, url=f"http://127.0.0.1:${{HOST_PORT}}{path}",
+                    headers={"X-Test": "${HOST_PORT}"}, timeout=20))
+    try:
+        tools = await b.tools()
+        assert "echo" in {t.name for t in tools}
+        res = await b.call("add", {"a": 40, "b": 2})
+        assert res.content[0].text == "42"
+    finally:
+        await b.stop()
+        proc.kill()
+        await proc.wait()
+
+
+async def test_unreachable_remote_is_a_readable_error(free_port):
+    b = Backend(Cfg(name="down", transport="http", url=f"http://127.0.0.1:{free_port}/mcp"), start_timeout=10)
+    with pytest.raises(BackendError, match="down"):
+        await b.tools()
+    assert b.status().startswith("error")

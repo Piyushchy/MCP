@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Piyush Chaudhary", email = "mail@piyushchy.is-a.dev" }]
-dependencies = ["mcp>=1.27,<2", "tomli-w>=1.0"]
+dependencies = ["mcp>=1.30,<2", "tomli-w>=1.0"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-asyncio>=0.23"]

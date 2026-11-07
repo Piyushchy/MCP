@@ -14,10 +14,11 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 import anyio
+import httpx
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.exceptions import McpError
 from mcp.types import CONNECTION_CLOSED
 
@@ -114,8 +115,11 @@ class Backend:
                     )
                     read, write = await stack.enter_async_context(stdio_client(params, errlog=sys.stderr))
                 elif cfg.transport == "http":
-                    read, write, _ = await stack.enter_async_context(streamablehttp_client(
-                        expand(cfg.url), headers={k: expand(v) for k, v in cfg.headers.items()} or None))
+                    client = await stack.enter_async_context(httpx.AsyncClient(
+                        headers={k: expand(v) for k, v in cfg.headers.items()},
+                        timeout=httpx.Timeout(30.0, read=300.0), follow_redirects=False))
+                    read, write, _ = await stack.enter_async_context(
+                        streamable_http_client(expand(cfg.url), http_client=client))
                 else:
                     read, write = await stack.enter_async_context(sse_client(
                         expand(cfg.url), headers={k: expand(v) for k, v in cfg.headers.items()} or None))

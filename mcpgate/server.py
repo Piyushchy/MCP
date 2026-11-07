@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-from contextlib import asynccontextmanager
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -31,14 +30,8 @@ def _args(schema: dict) -> str:
 def build(settings: Settings, hub: Hub | None = None, **server_kwargs) -> tuple[FastMCP, Hub]:
     hub = hub or Hub(settings)
 
-    @asynccontextmanager
-    async def lifespan(_app):
-        try:
-            yield
-        finally:
-            await hub.stop()
-
-    app = FastMCP("mcpgate", instructions=INSTRUCTIONS, lifespan=lifespan, **server_kwargs)
+    # The hub outlives any single client session, so whoever runs the server (see serve.py) stops it.
+    app = FastMCP("mcpgate", instructions=INSTRUCTIONS, **server_kwargs)
 
     @app.tool(structured_output=False)
     async def search_tools(query: str = "", backend: str | None = None, limit: int = 8, refresh: bool = False) -> str:
