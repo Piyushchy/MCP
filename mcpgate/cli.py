@@ -91,6 +91,8 @@ def cmd_add(args) -> int:
     b.allow, b.deny, b.confirm = args.allow or ["*"], args.deny or [], args.confirm or []
     if args.timeout:
         b.timeout = args.timeout
+    if args.start_timeout:
+        b.start_timeout = args.start_timeout
     b.validate()
     s.backends[b.name] = b
     path = cfgmod.save(s, args.config)
@@ -354,6 +356,7 @@ def parser() -> argparse.ArgumentParser:
     a.add_argument("--deny", action="append", metavar="GLOB", help="hide and block these tools")
     a.add_argument("--confirm", action="append", metavar="GLOB", help="these tools need the user's approval")
     a.add_argument("--timeout", type=float, help="seconds to wait for a tool call (default 60)")
+    a.add_argument("--start-timeout", type=float, help="seconds to wait for the server to start (default 30; raise it for a first npx/uvx download)")
     a.add_argument("--description", help="one line shown in list_backends")
     a.set_defaults(fn=cmd_add)
 

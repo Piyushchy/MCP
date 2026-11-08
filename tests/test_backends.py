@@ -136,3 +136,28 @@ async def test_unreachable_remote_is_a_readable_error(free_port):
     with pytest.raises(BackendError, match="down"):
         await b.tools()
     assert b.status().startswith("error")
+
+
+async def test_start_timeout_comes_from_the_config_so_slow_first_runs_can_succeed():
+    """A server that needs a few seconds to start (like a first npx/uvx download) works once the limit allows it."""
+    from mcpgate import config
+    from mcpgate.hub import Hub
+    from tests.conftest import DEMO
+    slow = ("import runpy, sys, time; time.sleep(2.5); sys.argv = ['demo']; "
+            f"runpy.run_path({DEMO!r}, run_name='__main__')")
+
+    def hub_with(start_timeout):
+        s = config.parse({"backends": {"slow": {"command": sys.executable, "args": ["-c", slow], "start_timeout": start_timeout}}})
+        return Hub(s)
+
+    h1 = hub_with(1)
+    try:
+        with pytest.raises(BackendError, match="did not start"):
+            await h1.backends["slow"].tools()
+    finally:
+        await h1.stop()
+    h2 = hub_with(20)
+    try:
+        assert "echo" in {t.name for t in await h2.backends["slow"].tools()}
+    finally:
+        await h2.stop()

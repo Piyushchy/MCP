@@ -72,3 +72,13 @@ def test_bad_toml_is_a_config_error(tmp_path):
 def test_config_path_env(monkeypatch, tmp_path):
     monkeypatch.setenv("MCPGATE_CONFIG", str(tmp_path / "x.toml"))
     assert config.config_path() == tmp_path / "x.toml"
+
+
+def test_start_timeout_parses_saves_and_is_validated(tmp_path):
+    s = config.parse({"backends": {"a": {"command": "x", "start_timeout": 120}}})
+    assert s.backends["a"].start_timeout == 120.0 and Backend(name="b", command="x").start_timeout == 30.0
+    config.save(s, tmp_path / "c.toml")
+    assert config.load(tmp_path / "c.toml").backends["a"].start_timeout == 120.0
+    for bad in [{"command": "x", "start_timeout": 0}, {"command": "x", "start_timeout": "soon"}]:
+        with pytest.raises(ConfigError):
+            config.parse({"backends": {"a": bad}})

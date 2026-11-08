@@ -61,6 +61,7 @@ class Backend:
     confirm: list[str] = field(default_factory=list)
     enabled: bool = True
     timeout: float = 60.0
+    start_timeout: float = 30.0      # seconds to wait for the server to start (first runs of npx/uvx download packages)
     description: str = ""
     source: str = "config"  # "config" or "custom" (a drop-in file)
 
@@ -75,8 +76,8 @@ class Backend:
         if self.transport != "stdio":
             if not self.url.startswith(("http://", "https://", "${")):
                 raise ConfigError(f"[{self.name}] a {self.transport} backend needs an http(s) 'url'")
-        if self.timeout <= 0:
-            raise ConfigError(f"[{self.name}] timeout must be positive")
+        if self.timeout <= 0 or self.start_timeout <= 0:
+            raise ConfigError(f"[{self.name}] timeout and start_timeout must be positive")
 
     def to_dict(self) -> dict:
         d: dict = {"transport": self.transport}
@@ -102,6 +103,8 @@ class Backend:
             d["enabled"] = False
         if self.timeout != 60.0:
             d["timeout"] = self.timeout
+        if self.start_timeout != 30.0:
+            d["start_timeout"] = self.start_timeout
         if self.description:
             d["description"] = self.description
         return d
@@ -119,7 +122,7 @@ class Settings:
 
 _GATEWAY_KEYS = {"cache_ttl", "tools_ttl", "max_result_chars", "audit_log", "custom_dir"}
 _BACKEND_KEYS = {"transport", "command", "args", "env", "cwd", "url", "headers", "allow", "deny",
-                 "confirm", "enabled", "timeout", "description"}
+                 "confirm", "enabled", "timeout", "start_timeout", "description"}
 
 
 def _strlist(name: str, key: str, v) -> list[str]:
@@ -174,10 +177,10 @@ def parse(data: dict) -> Settings:
                 if not isinstance(value, bool):
                     raise ConfigError(f"[{name}] 'enabled' must be true or false")
                 b.enabled = value
-            elif key == "timeout":
+            elif key in ("timeout", "start_timeout"):
                 if not isinstance(value, (int, float)) or isinstance(value, bool):
-                    raise ConfigError(f"[{name}] 'timeout' must be a number")
-                b.timeout = float(value)
+                    raise ConfigError(f"[{name}] '{key}' must be a number")
+                setattr(b, key, float(value))
             else:
                 if not isinstance(value, str):
                     raise ConfigError(f"[{name}] '{key}' must be a string")

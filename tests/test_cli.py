@@ -121,3 +121,8 @@ def test_serve_over_http_needs_a_token_off_loopback(cfg, capsys, monkeypatch):
     monkeypatch.delenv("MCPGATE_TOKEN", raising=False)
     assert run("serve", "--http", "--host", "0.0.0.0") == 2
     assert "needs a token" in capsys.readouterr().err
+
+
+def test_add_accepts_start_timeout(cfg):
+    assert run("add", "slow", "--start-timeout", "90", "--", "npx", "-y", "something") == 0
+    assert config.load(cfg).backends["slow"].start_timeout == 90.0

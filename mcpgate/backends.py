@@ -137,9 +137,10 @@ class Backend:
         except asyncio.TimeoutError:
             self.error = f"did not start within {self.start_timeout:g}s"
         except ConfigError as e:
-            self.error = str(e)
+            self.error = self.error or str(e)
         except Exception as e:  # noqa: BLE001 - any start/transport failure is reported, not raised
-            self.error = _describe(e)
+            # keep the first, clearer reason (e.g. "did not start"): closing a half-started process can raise again
+            self.error = self.error or _describe(e)
         finally:
             self.session = None
             self._ready.set()

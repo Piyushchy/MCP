@@ -27,7 +27,7 @@ class GatewayError(Exception):
 class Hub:
     def __init__(self, settings: Settings):
         self.settings = settings
-        self.backends: dict[str, Backend] = {n: Backend(c) for n, c in settings.backends.items()}
+        self.backends: dict[str, Backend] = {n: Backend(c, start_timeout=c.start_timeout) for n, c in settings.backends.items()}
         self.policies = {n: Policy(c.allow, c.deny, c.confirm) for n, c in settings.backends.items()}
         self.store = ResultStore()
         self.audit = Audit(settings.audit_log)
