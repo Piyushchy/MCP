@@ -40,6 +40,18 @@ def whoami() -> str:
     return f"secret={os.environ.get('DEMO_SECRET', '-')} leak={os.environ.get('GATEWAY_ONLY', '-')}"
 
 
+@mcp.tool(annotations=READ)
+def listenv(prefix: str) -> str:
+    """Names of environment variables starting with prefix."""
+    return ",".join(sorted(k for k in os.environ if k.startswith(prefix)))
+
+
+@mcp.tool()
+def shout(text: str) -> str:
+    """Always fails and puts text in the error."""
+    raise RuntimeError(f"failed with {text}")
+
+
 @mcp.tool()
 async def nap(seconds: float) -> str:
     """Wait, then answer (used to test reloads during a running call)."""

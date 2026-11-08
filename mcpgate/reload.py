@@ -27,13 +27,15 @@ class Reloader:
         self._task: asyncio.Task | None = None
 
     async def check(self, force: bool = False) -> bool:
-        sig = loader.signature(self.path, self.extra_files)
+        extra = self.extra_files + ([self.hub.secrets.path] if self.hub.secrets else [])
+        sig = loader.signature(self.path, extra)
         if not force and sig == self._sig:
             return False
         self._sig = sig
         try:
             settings = loader.load_settings(self.path)
             self.last = await self.hub.reload(settings)
+            self.last["secrets_restarted"] = await self.hub.apply_secret_changes()
             self.error = ""
             if self.on_reload:
                 await self.on_reload(self.last)

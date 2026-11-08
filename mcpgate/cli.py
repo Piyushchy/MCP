@@ -45,6 +45,11 @@ def _settings(args, with_drop_ins: bool = True) -> Settings:
     return custom.with_custom(s) if with_drop_ins else s
 
 
+def _secrets():
+    from .secretstore import SecretStore
+    return SecretStore()
+
+
 def _reloader(hub, args):
     from .reload import Reloader
     return Reloader(hub, args.config)
@@ -150,7 +155,7 @@ def cmd_tools(args) -> int:
     from .trim import short
 
     async def run() -> int:
-        hub = Hub(_settings(args))
+        hub = Hub(_settings(args), secrets=_secrets())
         try:
             tools, errors = await hub.catalog(args.name)
         except GatewayError as e:
@@ -250,7 +255,8 @@ def cmd_serve(args) -> int:
                               f"(or set {args.token_env}), or set a public address for OAuth")
         sec = serve.transport_security(list(args.allow_host or []) + list(srv.allow_hosts))
         kwargs = {"host": host, "port": port, **({"transport_security": sec} if sec else {})}
-    app, hub = build(s, oauth=oauth, **kwargs)
+    from .hub import Hub
+    app, hub = build(s, hub=Hub(s, secrets=_secrets()), oauth=oauth, **kwargs)
     if args.http:
         how = ("OAuth (passphrase approval)" + (" and static token" if (token or verify) else "")) if oauth else (
             "token required" if (token or verify) else "no token, loopback only")
@@ -263,6 +269,28 @@ def cmd_serve(args) -> int:
             raise ConfigError(str(e)) from None
     else:
         serve.run_stdio(app, hub, reloader=_reloader(hub, args))
+    return 0
+
+
+def cmd_secret(args) -> int:
+    """Store a value a backend needs. The value is typed hidden and can never be shown again."""
+    import getpass
+    store = _secrets()
+    if args.action == "list":
+        rows = store.names()
+        for r in rows:
+            print(f"{r['name']:<32} set")
+        if not rows:
+            print("no secrets stored")
+        return 0
+    if not args.name:
+        raise ConfigError(f"usage: mcpgate secret {args.action} NAME")
+    if args.action == "set":
+        value = getpass.getpass(f"Value for {args.name} (hidden): ")
+        store.set(args.name, value)
+        print(f"Saved {args.name}. It cannot be shown again, only replaced or removed.")
+        return 0
+    print("Removed." if store.delete(args.name) else "It was not set.")
     return 0
 
 
@@ -330,6 +358,7 @@ def cmd_doctor(args) -> int:
     path = Path(args.config).expanduser() if args.config else cfgmod.config_path()
     print(f"config: {path}" + ("" if path.exists() else " (not created yet, using defaults)"))
     s = _settings(args)  # a broken file raises ConfigError, reported by main()
+    store = _secrets()
     if path.exists() and (path.stat().st_mode & 0o077):
         bad(f"{path} is readable by other users; run: chmod 600 {path}")
     folder = custom.folder(s)
@@ -345,14 +374,15 @@ def cmd_doctor(args) -> int:
         for text in [b.command, b.url, *b.args, *b.env.values(), *b.headers.values(), b.cwd]:
             refs |= {m.group(1) for m in ENV_RE.finditer(text) if m.group(2) is None}
         for var in sorted(refs):
-            (ok if os.environ.get(var) else bad)(f"environment variable {var} is {'set' if os.environ.get(var) else 'NOT set'}")
+            where = "environment" if os.environ.get(var) else "secrets store" if store.has(var) else ""
+            (ok if where else bad)(f"{var} is {'set (' + where + ')' if where else 'NOT set (mcpgate secret set ' + var + ')'}")
         if b.transport == "stdio" and "${" not in b.command:
             found = shutil.which(b.command) or (Path(b.command).is_file() and b.command)
             (ok if found else bad)(f"command {b.command!r} {'found' if found else 'not found on PATH'}")
 
     if not args.no_connect:
         async def probe():
-            hub = Hub(s)
+            hub = Hub(s, secrets=store)
             try:
                 for name, b in sorted(hub.backends.items()):
                     if not b.cfg.enabled:
@@ -425,6 +455,10 @@ def parser() -> argparse.ArgumentParser:
     o.add_argument("action", choices=["status", "revoke-all"])
     o.add_argument("--state-file")
     o.set_defaults(fn=cmd_oauth)
+    sc = sub.add_parser("secret", help="store tokens and API keys that backends reference as ${NAME} (write-only)")
+    sc.add_argument("action", choices=["set", "list", "remove"])
+    sc.add_argument("name", nargs="?")
+    sc.set_defaults(fn=cmd_secret)
     au = sub.add_parser("auth", help="set the approval passphrase / static token (stored only as hashes)")
     au.add_argument("action", choices=["status", "passphrase", "token", "clear-passphrase", "clear-token"])
     au.set_defaults(fn=cmd_auth)

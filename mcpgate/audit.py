@@ -23,8 +23,9 @@ def redact(value, depth: int = 0):
 
 
 class Audit:
-    def __init__(self, path: str = ""):
+    def __init__(self, path: str = "", scrub=None):
         self.path = Path(path).expanduser() if path else None
+        self.scrub = scrub   # optional text filter applied to every line (blanks stored secret values)
 
     def log(self, **fields) -> None:
         if not self.path:
@@ -36,6 +37,7 @@ class Audit:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
             with os.fdopen(fd, "a") as f:
-                f.write(json.dumps(fields, default=str) + "\n")
+                line = json.dumps(fields, default=str)
+                f.write((self.scrub(line) if self.scrub else line) + "\n")
         except OSError:
             pass  # auditing must never break a tool call

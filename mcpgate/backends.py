@@ -48,8 +48,9 @@ class ToolInfo:
 
 
 class Backend:
-    def __init__(self, cfg: BackendConfig, start_timeout: float = 30.0):
+    def __init__(self, cfg: BackendConfig, start_timeout: float = 30.0, secrets=None):
         self.cfg = cfg
+        self.secrets = secrets
         self.start_timeout = start_timeout
         self.session: ClientSession | None = None
         self.error: str = ""
@@ -104,25 +105,27 @@ class Backend:
 
     async def _run(self) -> None:
         cfg = self.cfg
+        lookup = self.secrets.get if self.secrets else None
+        ex = lambda text: expand(text, lookup=lookup)  # noqa: E731
         try:
             async with AsyncExitStack() as stack:
                 if cfg.transport == "stdio":
                     params = StdioServerParameters(
-                        command=expand(cfg.command),
-                        args=[expand(a) for a in cfg.args],
-                        env={k: expand(v) for k, v in cfg.env.items()},
-                        cwd=expand(cfg.cwd) if cfg.cwd else None,
+                        command=ex(cfg.command),
+                        args=[ex(a) for a in cfg.args],
+                        env={k: ex(v) for k, v in cfg.env.items()},
+                        cwd=ex(cfg.cwd) if cfg.cwd else None,
                     )
                     read, write = await stack.enter_async_context(stdio_client(params, errlog=_errlog()))
                 elif cfg.transport == "http":
                     client = await stack.enter_async_context(httpx.AsyncClient(
-                        headers={k: expand(v) for k, v in cfg.headers.items()},
+                        headers={k: ex(v) for k, v in cfg.headers.items()},
                         timeout=httpx.Timeout(30.0, read=300.0), follow_redirects=False))
                     read, write, _ = await stack.enter_async_context(
-                        streamable_http_client(expand(cfg.url), http_client=client))
+                        streamable_http_client(ex(cfg.url), http_client=client))
                 else:
                     read, write = await stack.enter_async_context(sse_client(
-                        expand(cfg.url), headers={k: expand(v) for k, v in cfg.headers.items()} or None))
+                        ex(cfg.url), headers={k: ex(v) for k, v in cfg.headers.items()} or None))
                 session = await stack.enter_async_context(ClientSession(read, write))
                 try:
                     await asyncio.wait_for(session.initialize(), self.start_timeout)
@@ -137,13 +140,16 @@ class Backend:
         except asyncio.TimeoutError:
             self.error = f"did not start within {self.start_timeout:g}s"
         except ConfigError as e:
-            self.error = self.error or str(e)
+            self.error = self.error or self._clean(str(e))
         except Exception as e:  # noqa: BLE001 - any start/transport failure is reported, not raised
             # keep the first, clearer reason (e.g. "did not start"): closing a half-started process can raise again
-            self.error = self.error or _describe(e)
+            self.error = self.error or self._clean(_describe(e))
         finally:
             self.session = None
             self._ready.set()
+
+    def _clean(self, text: str) -> str:
+        return self.secrets.scrub(text) if self.secrets else text
 
     async def _shutdown_task(self) -> None:
         self._stop.set()
@@ -180,7 +186,7 @@ class Backend:
                 if not cursor:
                     break
         except Exception as e:  # noqa: BLE001
-            self.error = _describe(e)
+            self.error = self._clean(_describe(e))
             await self.stop()
             raise BackendError(f"{self.name}: could not list tools ({self.error})") from None
         self._tools, self._tools_at = found, time.monotonic()
@@ -198,13 +204,13 @@ class Backend:
                 if e.error.code == CONNECTION_CLOSED:  # the server went away mid-call
                     self.error = "connection closed"
                     await self.stop()
-                raise BackendError(f"{self.name}.{tool}: {e}") from None
+                raise BackendError(self._clean(f"{self.name}.{tool}: {e}")) from None
             except _CLOSED:
                 await self.stop()
                 if attempt == 2:
                     raise BackendError(f"{self.name}.{tool}: connection closed") from None
             except Exception as e:  # noqa: BLE001
-                self.error = _describe(e)
+                self.error = self._clean(_describe(e))
                 await self.stop()
                 raise BackendError(f"{self.name}.{tool}: connection problem ({self.error})") from None
         raise AssertionError("unreachable")

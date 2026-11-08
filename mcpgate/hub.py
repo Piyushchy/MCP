@@ -25,15 +25,33 @@ class GatewayError(Exception):
 
 
 class Hub:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, secrets=None):
         self.settings = settings
-        self.backends: dict[str, Backend] = {n: Backend(c, start_timeout=c.start_timeout) for n, c in settings.backends.items()}
+        self.secrets = secrets   # optional SecretStore for ${NAME} values the environment lacks
+        self._secret_fp = secrets.fingerprints() if secrets else {}
+        self.backends: dict[str, Backend] = {n: Backend(c, start_timeout=c.start_timeout, secrets=secrets) for n, c in settings.backends.items()}
         self.policies = {n: Policy(c.allow, c.deny, c.confirm) for n, c in settings.backends.items()}
         self.store = ResultStore()
-        self.audit = Audit(settings.audit_log)
+        self.audit = Audit(settings.audit_log, self._scrub)
         self._cache: dict[str, tuple[float, list, str]] = {}
         self._reload_lock = asyncio.Lock()
         self._pending: dict[str, tuple[str, str, float]] = {}
+
+    def _scrub(self, text: str) -> str:
+        return self.secrets.scrub(text) if self.secrets else text
+
+    async def apply_secret_changes(self) -> list[str]:
+        """Restart the backends that use a secret whose value was added, changed or removed."""
+        if not self.secrets:
+            return []
+        now = self.secrets.fingerprints()
+        changed = {n for n in set(now) | set(self._secret_fp) if now.get(n) != self._secret_fp.get(n)}
+        self._secret_fp = now
+        hit = [b for b in self.backends.values() if b.cfg.secret_refs() & changed]
+        await asyncio.gather(*(b.stop() for b in hit), return_exceptions=True)
+        for b in hit:
+            self._cache = {k: v for k, v in self._cache.items() if v[2] != b.name}
+        return [b.name for b in hit]
 
     async def stop(self) -> None:
         await asyncio.gather(*(b.stop() for b in self.backends.values()), return_exceptions=True)
@@ -52,11 +70,11 @@ class Hub:
             for name, cfg in new.backends.items():
                 cur = old.get(name)
                 if cur is None:
-                    kept[name] = Backend(cfg, start_timeout=cfg.start_timeout)
+                    kept[name] = Backend(cfg, start_timeout=cfg.start_timeout, secrets=self.secrets)
                     added.append(name)
                 elif cur.cfg.connection_key() != cfg.connection_key():
                     stopping.append(cur)
-                    kept[name] = Backend(cfg, start_timeout=cfg.start_timeout)
+                    kept[name] = Backend(cfg, start_timeout=cfg.start_timeout, secrets=self.secrets)
                     restarted.append(name)
                 else:
                     if (cur.cfg.allow, cur.cfg.deny, cur.cfg.confirm) != (cfg.allow, cfg.deny, cfg.confirm):
@@ -72,7 +90,7 @@ class Hub:
             self.settings, self.backends = new, kept
             self.policies = {n: Policy(c.allow, c.deny, c.confirm) for n, c in new.backends.items()}
             if audit_changed:
-                self.audit = Audit(new.audit_log)
+                self.audit = Audit(new.audit_log, self._scrub)
             touched = set(added) | set(removed) | set(restarted) | set(updated)
             self._cache = {k: v for k, v in self._cache.items() if v[2] not in touched}
             await asyncio.gather(*(b.stop() for b in stopping), return_exceptions=True)
@@ -152,7 +170,7 @@ class Hub:
                 if result.isError:
                     text = _join_text(content) or "the tool reported an error"
                     status = "tool_error"
-                    raise GatewayError(cap(text, self.settings.max_result_chars, self.store))
+                    raise GatewayError(cap(self._scrub(text), self.settings.max_result_chars, self.store))
                 status = "ok"
                 if cacheable:
                     self._remember(key, content, info.backend)

@@ -31,14 +31,18 @@ def config_path() -> Path:
     return Path(base).expanduser() / "mcpgate" / "config.toml"
 
 
-def expand(value: str, environ=None) -> str:
-    """Replace ${VAR} / ${VAR:-default}. A missing variable without a default is an error."""
+def expand(value: str, environ=None, lookup=None) -> str:
+    """Replace ${VAR} / ${VAR:-default}. The real environment is consulted first, then ``lookup(name)``
+    (the secrets store). A missing variable without a default is an error."""
     environ = os.environ if environ is None else environ
 
     def sub(m):
         name, default = m.group(1), m.group(2)
         if name in environ and environ[name] != "":
             return environ[name]
+        found = lookup(name) if lookup else None
+        if found:
+            return found
         if default is not None:
             return default
         raise ConfigError(f"environment variable {name} is not set")
@@ -70,6 +74,13 @@ class Backend:
         keeps the running connection; policy, description and call timeout can change without a restart."""
         return (self.transport, self.command, tuple(self.args), tuple(sorted(self.env.items())), self.cwd,
                 self.url, tuple(sorted(self.headers.items())), self.enabled, self.start_timeout)
+
+    def secret_refs(self) -> set[str]:
+        """Names this backend references as ${NAME} anywhere in its settings."""
+        refs: set[str] = set()
+        for text in [self.command, self.cwd, self.url, *self.args, *self.env.values(), *self.headers.values()]:
+            refs |= {m.group(1) for m in ENV_RE.finditer(text)}
+        return refs
 
     def validate(self) -> None:
         if not NAME_RE.match(self.name):
