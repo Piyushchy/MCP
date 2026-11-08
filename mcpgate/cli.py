@@ -45,6 +45,11 @@ def _settings(args, with_drop_ins: bool = True) -> Settings:
     return custom.with_custom(s) if with_drop_ins else s
 
 
+def _reloader(hub, args):
+    from .reload import Reloader
+    return Reloader(hub, args.config)
+
+
 def _kv(items: list[str], what: str) -> dict[str, str]:
     out = {}
     for item in items or []:
@@ -245,11 +250,11 @@ def cmd_serve(args) -> int:
         if oauth:
             print(f"Add this URL in claude.ai (Customize > Connectors > Add custom connector): {oauth.public_url}/mcp", file=sys.stderr)
         try:
-            serve.run_http(app, hub, args.host, args.port, token, oauth=oauth is not None)
+            serve.run_http(app, hub, args.host, args.port, token, oauth=oauth is not None, reloader=_reloader(hub, args))
         except ValueError as e:
             raise ConfigError(str(e)) from None
     else:
-        serve.run_stdio(app, hub)
+        serve.run_stdio(app, hub, reloader=_reloader(hub, args))
     return 0
 
 

@@ -31,11 +31,52 @@ class Hub:
         self.policies = {n: Policy(c.allow, c.deny, c.confirm) for n, c in settings.backends.items()}
         self.store = ResultStore()
         self.audit = Audit(settings.audit_log)
-        self._cache: dict[str, tuple[float, list]] = {}
+        self._cache: dict[str, tuple[float, list, str]] = {}
+        self._reload_lock = asyncio.Lock()
         self._pending: dict[str, tuple[str, str, float]] = {}
 
     async def stop(self) -> None:
         await asyncio.gather(*(b.stop() for b in self.backends.values()), return_exceptions=True)
+
+    async def reload(self, new: Settings) -> dict:
+        """Apply new settings to the running hub.
+
+        Backends whose connection details are unchanged keep their process and connection (a call in
+        flight finishes). Changed ones are restarted on next use, removed ones are stopped, new ones start
+        lazily. Policy and limits take effect on the very next call."""
+        async with self._reload_lock:
+            old = self.backends
+            kept: dict[str, Backend] = {}
+            added, removed, restarted, updated = [], [], [], []
+            stopping: list[Backend] = []
+            for name, cfg in new.backends.items():
+                cur = old.get(name)
+                if cur is None:
+                    kept[name] = Backend(cfg, start_timeout=cfg.start_timeout)
+                    added.append(name)
+                elif cur.cfg.connection_key() != cfg.connection_key():
+                    stopping.append(cur)
+                    kept[name] = Backend(cfg, start_timeout=cfg.start_timeout)
+                    restarted.append(name)
+                else:
+                    if (cur.cfg.allow, cur.cfg.deny, cur.cfg.confirm) != (cfg.allow, cfg.deny, cfg.confirm):
+                        updated.append(name)
+                    cur.cfg = cfg
+                    kept[name] = cur
+            for name, b in old.items():
+                if name not in new.backends:
+                    stopping.append(b)
+                    removed.append(name)
+            audit_changed = new.audit_log != self.settings.audit_log
+            # one synchronous swap: no await between these lines, so no call sees a half-applied state
+            self.settings, self.backends = new, kept
+            self.policies = {n: Policy(c.allow, c.deny, c.confirm) for n, c in new.backends.items()}
+            if audit_changed:
+                self.audit = Audit(new.audit_log)
+            touched = set(added) | set(removed) | set(restarted) | set(updated)
+            self._cache = {k: v for k, v in self._cache.items() if v[2] not in touched}
+            await asyncio.gather(*(b.stop() for b in stopping), return_exceptions=True)
+            return {"added": added, "removed": removed, "restarted": restarted, "policy_changed": updated}
 
     # -- catalogue ---------------------------------------------------------
     def _enabled(self, only: str | None = None) -> list[Backend]:
@@ -114,13 +155,13 @@ class Hub:
                     raise GatewayError(cap(text, self.settings.max_result_chars, self.store))
                 status = "ok"
                 if cacheable:
-                    self._remember(key, content)
+                    self._remember(key, content, info.backend)
             return self._shape(content)
         finally:
             self.audit.log(tool=full, args=arguments, status=status, ms=int((time.monotonic() - started) * 1000))
 
-    def _remember(self, key: str, content: list) -> None:
-        self._cache[key] = (time.monotonic(), content)
+    def _remember(self, key: str, content: list, backend: str) -> None:
+        self._cache[key] = (time.monotonic(), content, backend)
         while len(self._cache) > CACHE_MAX:
             self._cache.pop(next(iter(self._cache)))
 

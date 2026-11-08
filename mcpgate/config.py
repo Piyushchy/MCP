@@ -65,6 +65,12 @@ class Backend:
     description: str = ""
     source: str = "config"  # "config" or "custom" (a drop-in file)
 
+    def connection_key(self) -> tuple:
+        """Everything that decides how the server is started or reached. If this is unchanged, a reload
+        keeps the running connection; policy, description and call timeout can change without a restart."""
+        return (self.transport, self.command, tuple(self.args), tuple(sorted(self.env.items())), self.cwd,
+                self.url, tuple(sorted(self.headers.items())), self.enabled, self.start_timeout)
+
     def validate(self) -> None:
         if not NAME_RE.match(self.name):
             raise ConfigError(

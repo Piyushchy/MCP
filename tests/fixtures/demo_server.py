@@ -40,6 +40,14 @@ def whoami() -> str:
     return f"secret={os.environ.get('DEMO_SECRET', '-')} leak={os.environ.get('GATEWAY_ONLY', '-')}"
 
 
+@mcp.tool()
+async def nap(seconds: float) -> str:
+    """Wait, then answer (used to test reloads during a running call)."""
+    import asyncio
+    await asyncio.sleep(seconds)
+    return "rested"
+
+
 @mcp.tool(annotations=ToolAnnotations(destructiveHint=True))
 def wipe(target: str) -> str:
     """Delete everything in the target. Dangerous."""

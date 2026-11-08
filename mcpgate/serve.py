@@ -66,21 +66,29 @@ def make_http_server(app: FastMCP, host: str, port: int, token: str | None, oaut
     return uvicorn.Server(uvicorn.Config(asgi, host=host, port=port, log_level="warning"))
 
 
-def run_stdio(app: FastMCP, hub: Hub) -> None:
+def run_stdio(app: FastMCP, hub: Hub, reloader=None) -> None:
     async def main():
+        if reloader:
+            reloader.start()
         try:
             await app.run_stdio_async()
         finally:
+            if reloader:
+                await reloader.stop()
             await hub.stop()
     asyncio.run(main())
 
 
-def run_http(app: FastMCP, hub: Hub, host: str, port: int, token: str | None, oauth: bool = False) -> None:
+def run_http(app: FastMCP, hub: Hub, host: str, port: int, token: str | None, oauth: bool = False, reloader=None) -> None:
     server = make_http_server(app, host, port, token, oauth)
 
     async def main():
+        if reloader:
+            reloader.start()
         try:
             await server.serve()
         finally:
+            if reloader:
+                await reloader.stop()
             await hub.stop()
     asyncio.run(main())
