@@ -197,27 +197,74 @@ def cmd_skill(args) -> int:
     return 0
 
 
+def _oauth_from_args(args, token):
+    """Build the OAuth provider when --public-url is given (what claude.ai needs)."""
+    from urllib.parse import urlparse
+
+    from . import oauth as oauthmod
+    url = args.public_url.rstrip("/")
+    u = urlparse(url)
+    if u.scheme != "https" and not (u.scheme == "http" and u.hostname in ("localhost", "127.0.0.1")):
+        raise ConfigError("--public-url must be an https:// address (for example your Tailscale Funnel URL)")
+    if u.path not in ("", "/") or u.query or u.fragment:
+        raise ConfigError("--public-url must be just the site address, without a path")
+    passphrase = os.environ.get(args.passphrase_env) or ""
+    if len(passphrase) < oauthmod.MIN_PASSPHRASE:
+        raise ConfigError(f"set {args.passphrase_env} to a passphrase of at least {oauthmod.MIN_PASSPHRASE} characters "
+                          f"(you type it on the approval page; make one with: mcpgate token)")
+    hosts = list(oauthmod.DEFAULT_REDIRECT_HOSTS) + list(args.oauth_redirect_host or [])
+    state = Path(args.state_file).expanduser() if args.state_file else None
+    return oauthmod.GatewayOAuth(url, passphrase, state, hosts, static_token=token)
+
+
 def cmd_serve(args) -> int:
     from . import serve
     from .server import build
     s = _settings(args)
     kwargs = {}
+    oauth = None
+    token = None
+    if args.public_url and not args.http:
+        raise ConfigError("--public-url only makes sense with --http")
     if args.http:
         token = os.environ.get(args.token_env) or None
-        if not token and not serve.is_loopback(args.host):
-            raise ConfigError(f"listening on {args.host} needs a token: set {args.token_env} (create one with: mcpgate token)")
+        if args.public_url:
+            oauth = _oauth_from_args(args, token)
+        elif not token and not serve.is_loopback(args.host):
+            raise ConfigError(f"listening on {args.host} needs a token: set {args.token_env} (create one with: mcpgate token), "
+                              f"or use --public-url for OAuth")
         sec = serve.transport_security(args.allow_host or [])
         kwargs = {"host": args.host, "port": args.port, **({"transport_security": sec} if sec else {})}
-    app, hub = build(s, **kwargs)
+    app, hub = build(s, oauth=oauth, **kwargs)
     if args.http:
-        print(f"mcpgate listening on http://{args.host}:{args.port}/mcp"
-              + (" (token required)" if token else " (no token, loopback only)"), file=sys.stderr)
+        how = ("OAuth (passphrase approval)" + (" and static token" if token else "")) if oauth else (
+            "token required" if token else "no token, loopback only")
+        print(f"mcpgate listening on http://{args.host}:{args.port}/mcp ({how})", file=sys.stderr)
+        if oauth:
+            print(f"Add this URL in claude.ai (Customize > Connectors > Add custom connector): {oauth.public_url}/mcp", file=sys.stderr)
         try:
-            serve.run_http(app, hub, args.host, args.port, token)
+            serve.run_http(app, hub, args.host, args.port, token, oauth=oauth is not None)
         except ValueError as e:
             raise ConfigError(str(e)) from None
     else:
         serve.run_stdio(app, hub)
+    return 0
+
+
+def cmd_oauth(args) -> int:
+    from . import oauth as oauthmod
+    path = Path(args.state_file).expanduser() if args.state_file else oauthmod.default_state_path()
+    if not path.exists():
+        print(f"No OAuth state yet ({path}).")
+        return 0
+    store = oauthmod.Store(path)
+    if args.action == "status":
+        now = __import__("time").time()
+        live = sum(1 for v in store.data["refresh"].values() if v["exp"] > now)
+        print(f"{path}\n{len(store.data['clients'])} registered app(s), {live} signed-in session(s)")
+        return 0
+    store.clear()  # a running gateway notices the change and refuses every old token
+    print("Signed out everywhere: all registered apps and tokens were removed.")
     return 0
 
 
@@ -289,6 +336,10 @@ def parser() -> argparse.ArgumentParser:
     s.add_argument("--port", type=int, default=8766)
     s.add_argument("--token-env", default="MCPGATE_TOKEN", help="environment variable holding the bearer token")
     s.add_argument("--allow-host", action="append", help="extra Host header to accept (behind a tunnel)")
+    s.add_argument("--public-url", help="the public https address (your Funnel URL) to turn on OAuth for claude.ai")
+    s.add_argument("--passphrase-env", default="MCPGATE_PASSPHRASE", help="environment variable with the approval passphrase")
+    s.add_argument("--state-file", help="where OAuth clients and token hashes are kept (default: ~/.local/state/mcpgate/oauth.json)")
+    s.add_argument("--oauth-redirect-host", action="append", help="allow another app's redirect host (default: claude.ai and localhost)")
     s.set_defaults(fn=cmd_serve)
 
     sub.add_parser("init", help="create a starter config file").set_defaults(fn=cmd_init)
@@ -320,6 +371,10 @@ def parser() -> argparse.ArgumentParser:
     n = sub.add_parser("new", help="create a custom MCP server file from a template")
     n.add_argument("name")
     n.set_defaults(fn=cmd_new)
+    o = sub.add_parser("oauth", help="see or reset the apps signed in through OAuth")
+    o.add_argument("action", choices=["status", "revoke-all"])
+    o.add_argument("--state-file")
+    o.set_defaults(fn=cmd_oauth)
     sub.add_parser("token", help="print a new random bearer token").set_defaults(fn=cmd_token)
     k = sub.add_parser("skill", help="show or install the 'mcp-gateway' skill that teaches a model to use the gateway efficiently")
     k.add_argument("action", choices=["show", "install"])
