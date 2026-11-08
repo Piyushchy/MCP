@@ -27,8 +27,10 @@ def _args(schema: dict) -> str:
     return ", ".join(f"{k}{'*' if k in req else ''}" for k in props)
 
 
-def build(settings: Settings, hub: Hub | None = None, **server_kwargs) -> tuple[FastMCP, Hub]:
+def build(settings: Settings, hub: Hub | None = None, oauth=None, **server_kwargs) -> tuple[FastMCP, Hub]:
     hub = hub or Hub(settings)
+    if oauth is not None:  # remote OAuth (see oauth.py): the SDK serves the OAuth endpoints, we add /consent
+        server_kwargs.update(auth_server_provider=oauth, auth=oauth.auth_settings)
 
     # The hub outlives any single client session, so whoever runs the server (see serve.py) stops it.
     app = FastMCP("mcpgate", instructions=INSTRUCTIONS, **server_kwargs)
@@ -95,4 +97,6 @@ def build(settings: Settings, hub: Hub | None = None, **server_kwargs) -> tuple[
         tail = f"\n\n[characters {offset}-{end} of {total}" + (f"; continue with offset={end}]" if end < total else "; end]")
         return chunk + tail
 
+    if oauth is not None:
+        oauth.install(app)
     return app, hub
