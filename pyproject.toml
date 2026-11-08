@@ -22,7 +22,7 @@ mcpgate = "mcpgate.cli:main"
 include = ["mcpgate*"]
 
 [tool.setuptools.package-data]
-mcpgate = ["data/**/*.md"]
+mcpgate = ["data/**/*.md", "admin/static/*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

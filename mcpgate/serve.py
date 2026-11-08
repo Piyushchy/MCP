@@ -96,3 +96,26 @@ def run_http(app: FastMCP, hub: Hub, host: str, port: int, token: str | None, oa
                 await reloader.stop()
             await hub.stop()
     asyncio.run(main())
+
+
+def run_service(hub: Hub, public: uvicorn.Server | None, admin, reloader=None) -> None:
+    """The long-running service: the local admin UI always, the public gateway listener only when remote access is set up.
+    If either listener stops, the other one is stopped too, so a half-running service is never left behind."""
+    async def main():
+        if reloader:
+            reloader.start()
+        servers = [t for t in (public.serve() if public else None, admin.serve()) if t is not None]
+        tasks = [asyncio.create_task(c) for c in servers]
+        try:
+            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for t in done:
+                t.result()   # surface a crash
+        finally:
+            if public:
+                public.should_exit = True
+            admin.stop()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            if reloader:
+                await reloader.stop()
+            await hub.stop()
+    asyncio.run(main())

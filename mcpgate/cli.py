@@ -214,6 +214,14 @@ def _auth_store():
     return AuthStore()
 
 
+def _admin(srv, hub):
+    from .admin.app import AdminError, AdminServer
+    try:
+        return AdminServer(srv.admin_port)
+    except AdminError as e:
+        raise ConfigError(str(e)) from None
+
+
 def cmd_serve(args) -> int:
     from . import oauth as oauthmod
     from . import serve
@@ -225,6 +233,12 @@ def cmd_serve(args) -> int:
     oauth = None
     token = None
     verify = None
+    if args.service:
+        # the service always runs the admin UI; the public listener only exists when remote access is configured
+        auth0 = _auth_store()
+        remote = bool(args.public_url or (srv.oauth_enabled and srv.public_url) or os.environ.get(args.token_env)
+                      or (srv.static_token_enabled and auth0.has("static_token")))
+        args.http = remote
     if args.public_url and not args.http:
         raise ConfigError("--public-url only makes sense with --http")
     if args.http:
@@ -264,9 +278,16 @@ def cmd_serve(args) -> int:
         if oauth:
             print(f"Add this URL in claude.ai (Customize > Connectors > Add custom connector): {oauth.public_url}/mcp", file=sys.stderr)
         try:
-            serve.run_http(app, hub, host, port, token, oauth=oauth is not None, reloader=_reloader(hub, args), verify=verify)
+            if args.service:
+                public = serve.make_http_server(app, host, port, token, oauth is not None, verify)
+                serve.run_service(hub, public, _admin(srv, hub), reloader=_reloader(hub, args))
+            else:
+                serve.run_http(app, hub, host, port, token, oauth=oauth is not None, reloader=_reloader(hub, args), verify=verify)
         except ValueError as e:
             raise ConfigError(str(e)) from None
+    elif args.service:
+        print(f"mcpgate service: admin UI on http://127.0.0.1:{srv.admin_port} (no remote access configured yet)", file=sys.stderr)
+        serve.run_service(hub, None, _admin(srv, hub), reloader=_reloader(hub, args))
     else:
         serve.run_stdio(app, hub, reloader=_reloader(hub, args))
     return 0
@@ -411,6 +432,7 @@ def parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("serve", help="run the gateway (stdio by default)")
     s.add_argument("--http", action="store_true", help="listen over HTTP instead of stdio")
+    s.add_argument("--service", action="store_true", help="run as the long-lived service: local admin UI always, public listener only if remote access is set up")
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=None, help="listen port (default: [server] port, 8766)")
     s.add_argument("--token-env", default="MCPGATE_TOKEN", help="environment variable holding the bearer token")
