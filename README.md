@@ -133,34 +133,72 @@ The code is tied to the exact tool and arguments, works once, and expires after 
 This is a speed bump that depends on the model relaying the request to you. It is **not** a hard guarantee
 (the model receives the code itself). For tools that must never run, use `deny`.
 
-## Running it remotely (HTTP)
+## Using it from claude.ai (HTTPS + OAuth)
 
-stdio is the default and needs no network. To reach the gateway from another machine:
-
-```bash
-export MCPGATE_TOKEN="$(mcpgate token)"        # keep this value; clients must send it
-mcpgate serve --http --port 8766               # http://127.0.0.1:8766/mcp
-```
-
-Every request must carry `Authorization: Bearer <token>` (24+ characters, constant-time check). Listening on a
-non-loopback address without a token is refused. To publish it through Tailscale Funnel:
+claude.ai (web and phone) runs on Anthropic's servers, so it cannot start a program on your laptop. It needs a
+public HTTPS address, and it logs in with OAuth. mcpgate includes a small single-owner OAuth server for this.
+(If you only use Claude Code or Claude Desktop on the same computer, skip this section: stdio needs no network.)
 
 ```bash
-sudo tailscale funnel --bg 8766
-mcpgate serve --http --allow-host your-machine.your-tailnet.ts.net
+export MCPGATE_PASSPHRASE="$(mcpgate token)"     # you type this on the approval page. Save it somewhere safe.
+sudo tailscale funnel --bg 8766                  # gives you https://your-machine.your-tailnet.ts.net
+mcpgate serve --http --port 8766 \
+    --public-url https://your-machine.your-tailnet.ts.net \
+    --allow-host your-machine.your-tailnet.ts.net
 ```
 
-`--allow-host` lets the gateway accept that Host header. Anyone who learns the token can use every tool
-you exposed, so give a remote gateway only the backends and tools you are happy to expose, and rotate the
-token if it leaks.
+Then in claude.ai: **Customize > Connectors > Add custom connector**, enter
+`https://your-machine.your-tailnet.ts.net/mcp`, leave the OAuth client fields empty (if asked how Claude
+identifies itself, choose **Register automatically**), and click **Connect**. Your browser opens the gateway's
+approval page; type the passphrase and press **Approve**. From then on Claude holds short-lived tokens and
+you do not sign in again (they refresh by themselves, and survive a gateway restart).
 
-Keep it running after you log out (systemd user service):
+How it protects you:
+
+- **Only you can approve.** Approval needs the passphrase (12+ characters, from the environment, never stored).
+  Five wrong guesses lock the page for 1 minute, then 2, 4... up to 15. A stranger who spams guesses can
+  therefore delay your own approval for a few minutes, but cannot get in.
+- **Redirect allow-list.** Only `claude.ai` and `localhost` (Claude Code) may register as an app. Others are
+  refused at registration. Add one with `--oauth-redirect-host HOST`.
+- **Short tokens, hashed at rest.** Access tokens last 1 hour; refresh tokens 30 days and rotate on every use
+  (a reused one is rejected). The state file (`~/.local/state/mcpgate/oauth.json`, mode 600) holds only hashes
+  of tokens, so a leaked copy cannot call your gateway.
+- **Sign everyone out:** `mcpgate oauth revoke-all` (works on a running gateway). `mcpgate oauth status` shows what is signed in.
+- The approval page cannot be framed, is never cached, and escapes everything an app tells it.
+
+What this does **not** do: there is one owner and one passphrase. Everyone who passes the approval page, or
+holds a token, can use every backend and tool you left enabled, as you. For a gateway on the internet, give it
+only the backends and tools you are happy to expose (`allow`/`deny`, or a separate `--config` file).
+
+Tested: the whole flow (registration, passphrase approval, PKCE, token use, refresh rotation and replay,
+expiry, revocation, lockout, restart) runs against a live server in the test suite, and the discovery
+documents follow what Anthropic's connector docs ask for. **Not yet tested against the real claude.ai.** If
+connecting fails, run `mcpgate serve` in a terminal and watch for the request that fails; `Couldn't reach the
+MCP server` usually means the public address or `--allow-host` is wrong. claude.ai prefers
+"Client ID Metadata Documents", which mcpgate does not offer; Anthropic documents that it falls back to
+dynamic registration, which mcpgate does.
+
+### A fixed token instead (no OAuth)
+
+Some clients (and some claude.ai organizations that have the "Request headers" beta) can send a fixed header.
+
+```bash
+export MCPGATE_TOKEN="$(mcpgate token)"
+mcpgate serve --http --port 8766 --allow-host your-machine.your-tailnet.ts.net
+```
+
+Every request must then carry `Authorization: Bearer <token>` (24+ characters, constant-time check). In
+claude.ai the header value must include the word: `Bearer your-token`. Listening on a non-loopback address
+with neither a token nor OAuth is refused. You can set both: the token keeps working next to OAuth.
+Anyone who learns the token can use every exposed tool, so rotate it if it leaks.
+
+### Keep it running after you log out
 
 ```ini
 # ~/.config/systemd/user/mcpgate.service
 [Service]
-EnvironmentFile=%h/.config/mcpgate/env        # contains MCPGATE_TOKEN=... and your backend secrets (chmod 600)
-ExecStart=%h/.local/bin/mcpgate serve --http
+EnvironmentFile=%h/.config/mcpgate/env        # MCPGATE_PASSPHRASE=... and your backend secrets (chmod 600)
+ExecStart=%h/.local/bin/mcpgate serve --http --port 8766 --public-url https://your-machine.your-tailnet.ts.net --allow-host your-machine.your-tailnet.ts.net
 Restart=on-failure
 [Install]
 WantedBy=default.target
@@ -177,7 +215,8 @@ are shortened, and the file is created mode 600. Statuses: `ok`, `cached`, `tool
 
 | Command | What it does |
 |---|---|
-| `mcpgate serve [--http --host --port --token-env --allow-host]` | Run the gateway. |
+| `mcpgate serve [--http --host --port --token-env --allow-host --public-url --passphrase-env --state-file --oauth-redirect-host]` | Run the gateway. `--public-url` turns on OAuth. |
+| `mcpgate oauth status` / `revoke-all` | See or sign out the apps connected through OAuth. |
 | `mcpgate init` | Create a commented starter config. |
 | `mcpgate add NAME [--url URL --sse --env --header --allow --deny --confirm --timeout --description] [-- CMD ARGS]` | Add a backend. |
 | `mcpgate remove NAME` / `enable NAME` / `disable NAME` | Manage backends in the config file. |
@@ -191,8 +230,9 @@ are shortened, and the file is created mode 600. Statuses: `ok`, `cached`, `tool
 ## Limitations (v0.1)
 
 - Only **tools** are proxied. Resources, prompts, sampling and notifications from backends are not forwarded.
-- Remote backends authenticate with static headers; there is no OAuth flow for them yet.
-- Remote access uses one shared bearer token: no per-user accounts or per-client permissions.
+- Remote *backends* authenticate with static headers; the gateway cannot yet sign in to a backend that requires OAuth.
+- Remote access has one owner: one passphrase, one static token. No per-user accounts or per-client permissions.
+- OAuth is implemented but not yet verified against the real claude.ai (see the section above).
 - The tool list is cached (`tools_ttl`); use `search_tools(refresh=true)` after a backend changes its tools.
 - The result cache and paging store live in memory and are not shared between gateway processes.
 - Config is read at start; restart the gateway after changes.
