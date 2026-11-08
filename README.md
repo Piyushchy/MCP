@@ -33,15 +33,18 @@ mcpgate init                                          # creates ~/.config/mcpgat
 ## Quick start
 
 ```bash
-# a local server started as a command (everything after -- is the command)
-mcpgate add github --env GITHUB_PERSONAL_ACCESS_TOKEN='${GITHUB_TOKEN}' \
-    --deny 'delete_*' --confirm 'create_*' -- npx -y @modelcontextprotocol/server-github
+# GitHub's own hosted MCP server: no local process, just your token in a header.
+# Make a fine-grained token limited to the repos you want, and put it in your environment first.
+export GITHUB_TOKEN=...
+mcpgate add github --url https://api.githubcopilot.com/mcp/ \
+    --header 'Authorization=Bearer ${GITHUB_TOKEN}' --deny 'delete_*'
 
-# a remote server
-mcpgate add docs --url https://example.com/mcp --header 'Authorization=Bearer ${DOCS_TOKEN}'
+# a local server started as a command (everything after -- is the command)
+mcpgate add colab --start-timeout 120 -- uvx git+https://github.com/googlecolab/colab-mcp
 
 mcpgate doctor          # checks the config, commands, environment variables and live connections
 mcpgate tools           # lists what the model will be able to find
+mcpgate tools github    # one backend; use it to pick the exact tool names for --confirm / --deny
 ```
 
 Then point your client at the gateway:
@@ -94,15 +97,16 @@ max_result_chars = 20000   # longer text results are cut; read_result pages the 
 audit_log = "~/.local/state/mcpgate/audit.jsonl"   # empty = no log
 custom_dir = ""            # empty = ~/.config/mcpgate/custom
 
-[backends.github]
+[backends.notes_server]
 command = "npx"
-args = ["-y", "@modelcontextprotocol/server-github"]
-env = { GITHUB_PERSONAL_ACCESS_TOKEN = "${GITHUB_TOKEN}" }   # the ONLY variables this server receives
+args = ["-y", "some-mcp-server-package"]
+env = { SOME_TOKEN = "${SOME_TOKEN}" }   # the ONLY variables this server receives
 allow = ["*"]              # glob patterns of visible tools (default all)
 deny = ["delete_*"]        # hidden and uncallable; deny beats allow
 confirm = ["create_*"]     # need the user's approval (see below)
 timeout = 60               # seconds per tool call
-description = "Issues and pull requests"
+start_timeout = 30         # seconds for the server to start (raise it for a first npx/uvx download)
+description = "What this server is for"
 
 [backends.docs]
 transport = "http"         # "http" (streamable HTTP) or "sse"
@@ -152,6 +156,19 @@ Then in claude.ai: **Customize > Connectors > Add custom connector**, enter
 identifies itself, choose **Register automatically**), and click **Connect**. Your browser opens the gateway's
 approval page; type the passphrase and press **Approve**. From then on Claude holds short-lived tokens and
 you do not sign in again (they refresh by themselves, and survive a gateway restart).
+
+**Funnel when you already use it for something else.** Funnel offers three public ports (443, 8443, 10000).
+If one is taken (say 443), use another for the gateway: `sudo tailscale funnel --bg --https=8443 8766`, and use
+`https://your-machine.your-tailnet.ts.net:8443` as `--public-url` (keep `--allow-host` as the bare host name).
+`tailscale funnel status` lists what is published. A shared address with the gateway under a path does not
+work, because the OAuth discovery addresses must be at the root.
+
+**Cloudflare Tunnel instead.** It works too (point it at `http://127.0.0.1:8766`). One warning: do not turn on a
+captcha, "I'm under attack" or bot protection for the whole address. claude.ai's servers make the MCP and token
+requests and cannot solve a captcha, and Anthropic's docs warn that a WAF in front of the connection can break
+sign-in. A challenge on the human-only `/consent` path would be fine, but is not built in yet. Cloudflare's 100 MB
+request limit does not matter here: MCP requests are small JSON, and results are capped at `max_result_chars`.
+Requests that wait over 100 seconds for a reply get a 524, so keep tool calls under that.
 
 How it protects you:
 
