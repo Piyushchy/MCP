@@ -204,57 +204,99 @@ def cmd_skill(args) -> int:
     return 0
 
 
-def _oauth_from_args(args, token):
-    """Build the OAuth provider when --public-url is given (what claude.ai needs)."""
-    from urllib.parse import urlparse
-
-    from . import oauth as oauthmod
-    url = args.public_url.rstrip("/")
-    u = urlparse(url)
-    if u.scheme != "https" and not (u.scheme == "http" and u.hostname in ("localhost", "127.0.0.1")):
-        raise ConfigError("--public-url must be an https:// address (for example your Tailscale Funnel URL)")
-    if u.path not in ("", "/") or u.query or u.fragment:
-        raise ConfigError("--public-url must be just the site address, without a path")
-    passphrase = os.environ.get(args.passphrase_env) or ""
-    if len(passphrase) < oauthmod.MIN_PASSPHRASE:
-        raise ConfigError(f"set {args.passphrase_env} to a passphrase of at least {oauthmod.MIN_PASSPHRASE} characters "
-                          f"(you type it on the approval page; make one with: mcpgate token)")
-    hosts = list(oauthmod.DEFAULT_REDIRECT_HOSTS) + list(args.oauth_redirect_host or [])
-    state = Path(args.state_file).expanduser() if args.state_file else None
-    return oauthmod.GatewayOAuth(url, passphrase, state, hosts, static_token=token)
+def _auth_store():
+    from .authstore import AuthStore
+    return AuthStore()
 
 
 def cmd_serve(args) -> int:
+    from . import oauth as oauthmod
     from . import serve
+    from .config import check_public_url
     from .server import build
     s = _settings(args)
-    kwargs = {}
+    srv = s.server
+    kwargs: dict = {}
     oauth = None
     token = None
+    verify = None
     if args.public_url and not args.http:
         raise ConfigError("--public-url only makes sense with --http")
     if args.http:
+        host = args.host
+        port = args.port if args.port is not None else srv.port
+        auth = _auth_store()
         token = os.environ.get(args.token_env) or None
-        if args.public_url:
-            oauth = _oauth_from_args(args, token)
-        elif not token and not serve.is_loopback(args.host):
-            raise ConfigError(f"listening on {args.host} needs a token: set {args.token_env} (create one with: mcpgate token), "
-                              f"or use --public-url for OAuth")
-        sec = serve.transport_security(args.allow_host or [])
-        kwargs = {"host": args.host, "port": args.port, **({"transport_security": sec} if sec else {})}
+        static_hashed = srv.static_token_enabled and auth.has("static_token")
+        if not token and static_hashed:
+            verify = lambda given: auth.verify("static_token", given)  # noqa: E731
+        # OAuth turns on with --public-url, or with [server] oauth_enabled and a public_url
+        public_url = args.public_url or (srv.public_url if srv.oauth_enabled else "")
+        if public_url:
+            url = check_public_url(public_url)
+            env_pass = os.environ.get(args.passphrase_env) or None
+            if env_pass is None and not auth.has("oauth_passphrase"):
+                raise ConfigError(f"no approval passphrase is set: run 'mcpgate auth passphrase' "
+                                  f"(or set {args.passphrase_env} to one of at least {oauthmod.MIN_PASSPHRASE} characters)")
+            hosts = list(oauthmod.DEFAULT_REDIRECT_HOSTS) + list(srv.oauth_redirect_hosts) + list(args.oauth_redirect_host or [])
+            state = Path(args.state_file).expanduser() if args.state_file else None
+            try:
+                oauth = oauthmod.GatewayOAuth(url, env_pass, state, hosts, static_token=token, auth=auth,
+                                              static_from_auth=static_hashed and not token)
+            except ValueError as e:
+                raise ConfigError(str(e)) from None
+        elif not token and not verify and not serve.is_loopback(host):
+            raise ConfigError(f"listening on {host} needs a token or OAuth: run 'mcpgate auth token' "
+                              f"(or set {args.token_env}), or set a public address for OAuth")
+        sec = serve.transport_security(list(args.allow_host or []) + list(srv.allow_hosts))
+        kwargs = {"host": host, "port": port, **({"transport_security": sec} if sec else {})}
     app, hub = build(s, oauth=oauth, **kwargs)
     if args.http:
-        how = ("OAuth (passphrase approval)" + (" and static token" if token else "")) if oauth else (
-            "token required" if token else "no token, loopback only")
-        print(f"mcpgate listening on http://{args.host}:{args.port}/mcp ({how})", file=sys.stderr)
+        how = ("OAuth (passphrase approval)" + (" and static token" if (token or verify) else "")) if oauth else (
+            "token required" if (token or verify) else "no token, loopback only")
+        print(f"mcpgate listening on http://{host}:{port}/mcp ({how})", file=sys.stderr)
         if oauth:
             print(f"Add this URL in claude.ai (Customize > Connectors > Add custom connector): {oauth.public_url}/mcp", file=sys.stderr)
         try:
-            serve.run_http(app, hub, args.host, args.port, token, oauth=oauth is not None, reloader=_reloader(hub, args))
+            serve.run_http(app, hub, host, port, token, oauth=oauth is not None, reloader=_reloader(hub, args), verify=verify)
         except ValueError as e:
             raise ConfigError(str(e)) from None
     else:
         serve.run_stdio(app, hub, reloader=_reloader(hub, args))
+    return 0
+
+
+def cmd_auth(args) -> int:
+    """Set the credentials the gateway checks. Only hashes are stored; nothing is printed back except a new token, once."""
+    import getpass
+
+    from .authstore import MIN_PASSPHRASE, AuthStore, new_token
+    store = AuthStore()
+    if args.action == "status":
+        for name, label in [("oauth_passphrase", "approval passphrase (claude.ai)"), ("static_token", "static bearer token"),
+                            ("admin_passphrase", "admin UI passphrase")]:
+            print(f"{label:<34} {'set' if store.has(name) else 'not set'}")
+        return 0
+    if args.action == "passphrase":
+        first = getpass.getpass(f"New approval passphrase (min {MIN_PASSPHRASE} characters): ")
+        if first != getpass.getpass("Repeat it: "):
+            raise ConfigError("the two entries do not match")
+        try:
+            store.set_passphrase("oauth_passphrase", first)
+        except ConfigError:
+            raise
+        print("Saved. Only a salted hash is stored.")
+        return 0
+    if args.action == "token":
+        t = new_token()
+        store.set_token("static_token", t)
+        s = cfgmod.load(args.config)
+        s.server.static_token_enabled = True
+        cfgmod.save(s, args.config)
+        print(f"New token (shown once, save it now):\n{t}")
+        return 0
+    name = {"clear-passphrase": "oauth_passphrase", "clear-token": "static_token"}[args.action]
+    print("Removed." if store.clear(name) else "It was not set.")
     return 0
 
 
@@ -340,7 +382,7 @@ def parser() -> argparse.ArgumentParser:
     s = sub.add_parser("serve", help="run the gateway (stdio by default)")
     s.add_argument("--http", action="store_true", help="listen over HTTP instead of stdio")
     s.add_argument("--host", default="127.0.0.1")
-    s.add_argument("--port", type=int, default=8766)
+    s.add_argument("--port", type=int, default=None, help="listen port (default: [server] port, 8766)")
     s.add_argument("--token-env", default="MCPGATE_TOKEN", help="environment variable holding the bearer token")
     s.add_argument("--allow-host", action="append", help="extra Host header to accept (behind a tunnel)")
     s.add_argument("--public-url", help="the public https address (your Funnel URL) to turn on OAuth for claude.ai")
@@ -383,6 +425,9 @@ def parser() -> argparse.ArgumentParser:
     o.add_argument("action", choices=["status", "revoke-all"])
     o.add_argument("--state-file")
     o.set_defaults(fn=cmd_oauth)
+    au = sub.add_parser("auth", help="set the approval passphrase / static token (stored only as hashes)")
+    au.add_argument("action", choices=["status", "passphrase", "token", "clear-passphrase", "clear-token"])
+    au.set_defaults(fn=cmd_auth)
     sub.add_parser("token", help="print a new random bearer token").set_defaults(fn=cmd_token)
     k = sub.add_parser("skill", help="show or install the 'mcp-gateway' skill that teaches a model to use the gateway efficiently")
     k.add_argument("action", choices=["show", "install"])

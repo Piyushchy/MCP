@@ -99,12 +99,18 @@ class Store:
 class GatewayOAuth:
     """Implements the SDK's authorization-server provider for one owner."""
 
-    def __init__(self, public_url: str, passphrase: str, state_path: Path | None = None,
-                 redirect_hosts=DEFAULT_REDIRECT_HOSTS, static_token: str | None = None):
-        if len(passphrase) < MIN_PASSPHRASE:
+    def __init__(self, public_url: str, passphrase: str | None = None, state_path: Path | None = None,
+                 redirect_hosts=DEFAULT_REDIRECT_HOSTS, static_token: str | None = None,
+                 auth=None, static_from_auth: bool = False):
+        """``passphrase`` / ``static_token`` are plain overrides (from the environment). Without them the
+        hashed values in ``auth`` are used: ``oauth_passphrase`` and, if ``static_from_auth``, ``static_token``."""
+        if passphrase is not None and len(passphrase) < MIN_PASSPHRASE:
             raise ValueError(f"the passphrase must be at least {MIN_PASSPHRASE} characters")
+        if passphrase is None and not (auth is not None and auth.has("oauth_passphrase")):
+            raise ValueError("no approval passphrase is set")
+        self.auth, self.static_from_auth = auth, static_from_auth
         self.public_url = public_url.rstrip("/")
-        self.passphrase = passphrase.encode()
+        self.passphrase = passphrase.encode() if passphrase is not None else None
         self.static_token = static_token.encode() if static_token else None
         self.redirect_hosts = {h.lower() for h in redirect_hosts}
         self.store = Store(state_path or default_state_path())
@@ -170,8 +176,8 @@ class GatewayOAuth:
             return self._redirect(str(params.redirect_uri), error="access_denied", state=params.state)
         if now < self._locked_until:
             return self._page(req, f"Too many wrong attempts. Try again in {int(self._locked_until - now) + 1} seconds.", 429)
-        given = (body.get("passphrase") or [""])[0].encode()
-        if not hmac.compare_digest(hashlib.sha256(given).digest(), hashlib.sha256(self.passphrase).digest()):
+        given = (body.get("passphrase") or [""])[0]
+        if not self._passphrase_ok(given):
             self._fails += 1
             if self._fails >= 5:  # lock for 1, 2, 4... minutes (max 15) so guessing is impractical
                 self._locked_until = now + min(900, 60 * 2 ** (self._fails - 5))
@@ -186,6 +192,16 @@ class GatewayOAuth:
             redirect_uri_provided_explicitly=params.redirect_uri_provided_explicitly,
             resource=params.resource, subject="owner")
         return self._redirect(str(params.redirect_uri), code=code, state=params.state)
+
+    def _passphrase_ok(self, given: str) -> bool:
+        if self.passphrase is not None:   # an environment override wins
+            return hmac.compare_digest(hashlib.sha256(given.encode()).digest(), hashlib.sha256(self.passphrase).digest())
+        return bool(self.auth and self.auth.verify("oauth_passphrase", given))
+
+    def _static_ok(self, token: str) -> bool:
+        if self.static_token is not None:
+            return hmac.compare_digest(token.encode(), self.static_token)
+        return bool(self.static_from_auth and self.auth and self.auth.verify("static_token", token))
 
     def _live(self, req: str, now: float):
         entry = self._pending.get(req)
@@ -273,7 +289,7 @@ button.deny{{background:transparent;color:var(--ink);border-color:var(--line)}}
         return self._issue(client.client_id, scopes or old["scopes"], old.get("resource"))
 
     async def load_access_token(self, token: str):
-        if self.static_token and hmac.compare_digest(token.encode(), self.static_token):
+        if self._static_ok(token):
             return AccessToken(token=token, client_id="static-token", scopes=[SCOPE], expires_at=None, subject="owner")
         self.store._sync()
         rec = self.store.data["access"].get(_h(token))

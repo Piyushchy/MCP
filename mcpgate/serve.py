@@ -36,17 +36,21 @@ def transport_security(allow_hosts: list[str]) -> TransportSecuritySettings | No
 class BearerAuth:
     """ASGI wrapper: every HTTP request must carry 'Authorization: Bearer <token>'."""
 
-    def __init__(self, app, token: str):
-        if len(token) < MIN_TOKEN:
-            raise ValueError(f"token must be at least {MIN_TOKEN} characters (try: mcpgate token)")
-        self.app, self.token = app, token.encode()
+    def __init__(self, app, token: str | None = None, verify=None):
+        """Give the plain ``token`` (from the environment) or a ``verify(candidate) -> bool`` callable (hashed)."""
+        if verify is None:
+            if token is None or len(token) < MIN_TOKEN:
+                raise ValueError(f"token must be at least {MIN_TOKEN} characters (try: mcpgate token)")
+            self.token = token.encode()
+            verify = lambda given: hmac.compare_digest(given.encode(), self.token)  # noqa: E731
+        self.app, self.verify = app, verify
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":  # lifespan etc. pass straight through
             return await self.app(scope, receive, send)
         auth = dict(scope["headers"]).get(b"authorization", b"")
         scheme, _, given = auth.partition(b" ")
-        if scheme.lower() == b"bearer" and hmac.compare_digest(given.strip(), self.token):
+        if scheme.lower() == b"bearer" and self.verify(given.strip().decode("latin-1")):
             return await self.app(scope, receive, send)
         body = b'{"error":"unauthorized"}'
         await send({"type": "http.response.start", "status": 401, "headers": [
@@ -55,14 +59,14 @@ class BearerAuth:
         await send({"type": "http.response.body", "body": body})
 
 
-def make_http_server(app: FastMCP, host: str, port: int, token: str | None, oauth: bool = False) -> uvicorn.Server:
+def make_http_server(app: FastMCP, host: str, port: int, token: str | None, oauth: bool = False, verify=None) -> uvicorn.Server:
     """With ``oauth`` the app itself authenticates (OAuth tokens, plus the static token if one is set),
     and its discovery, authorize and token endpoints must stay reachable, so no blanket wrapper is added."""
-    if not token and not oauth and not is_loopback(host):
+    if not token and not verify and not oauth and not is_loopback(host):
         raise ValueError("refusing to listen on a non-loopback address without a token or OAuth")
     asgi = app.streamable_http_app()
-    if token and not oauth:
-        asgi = BearerAuth(asgi, token)
+    if (token or verify) and not oauth:
+        asgi = BearerAuth(asgi, token, verify)
     return uvicorn.Server(uvicorn.Config(asgi, host=host, port=port, log_level="warning"))
 
 
@@ -79,8 +83,8 @@ def run_stdio(app: FastMCP, hub: Hub, reloader=None) -> None:
     asyncio.run(main())
 
 
-def run_http(app: FastMCP, hub: Hub, host: str, port: int, token: str | None, oauth: bool = False, reloader=None) -> None:
-    server = make_http_server(app, host, port, token, oauth)
+def run_http(app: FastMCP, hub: Hub, host: str, port: int, token: str | None, oauth: bool = False, reloader=None, verify=None) -> None:
+    server = make_http_server(app, host, port, token, oauth, verify)
 
     async def main():
         if reloader:

@@ -116,6 +116,32 @@ class Backend:
         return d
 
 
+HOST_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$")
+
+
+def check_public_url(url: str) -> str:
+    """The address clients use to reach the gateway: https (http only for localhost), no path."""
+    from urllib.parse import urlparse
+    u = urlparse(url.strip())
+    if u.scheme != "https" and not (u.scheme == "http" and u.hostname in ("localhost", "127.0.0.1")):
+        raise ConfigError("the public address must start with https:// (for example your Funnel URL)")
+    if not u.hostname or u.path not in ("", "/") or u.query or u.fragment or u.username:
+        raise ConfigError("the public address must be just the site (https://host or https://host:port), without a path")
+    return url.strip().rstrip("/")
+
+
+@dataclass
+class Server:
+    """How the gateway is reached. Passphrases and tokens are NOT here: they live hashed in auth.json."""
+    public_url: str = ""
+    port: int = 8766
+    admin_port: int = 8767
+    allow_hosts: list[str] = field(default_factory=list)
+    oauth_enabled: bool = False
+    oauth_redirect_hosts: list[str] = field(default_factory=list)
+    static_token_enabled: bool = False
+
+
 @dataclass
 class Settings:
     cache_ttl: float = 60.0          # seconds a read-only result is reused (0 turns the cache off)
@@ -124,9 +150,11 @@ class Settings:
     audit_log: str = ""              # JSONL file of every call ("" turns it off)
     custom_dir: str = ""             # folder of drop-in custom MCP servers ("" = default folder)
     backends: dict[str, Backend] = field(default_factory=dict)
+    server: Server = field(default_factory=Server)
 
 
 _GATEWAY_KEYS = {"cache_ttl", "tools_ttl", "max_result_chars", "audit_log", "custom_dir"}
+_SERVER_KEYS = {"public_url", "port", "admin_port", "allow_hosts", "oauth_enabled", "oauth_redirect_hosts", "static_token_enabled"}
 _BACKEND_KEYS = {"transport", "command", "args", "env", "cwd", "url", "headers", "allow", "deny",
                  "confirm", "enabled", "timeout", "start_timeout", "description"}
 
@@ -144,7 +172,7 @@ def _strmap(name: str, key: str, v) -> dict[str, str]:
 
 
 def parse(data: dict) -> Settings:
-    unknown = set(data) - {"gateway", "backends"}
+    unknown = set(data) - {"gateway", "backends", "server"}
     if unknown:
         raise ConfigError(f"unknown top-level section(s): {', '.join(sorted(unknown))}")
     s = Settings()
@@ -166,6 +194,35 @@ def parse(data: dict) -> Settings:
             if not isinstance(g[key], str):
                 raise ConfigError(f"[gateway] {key} must be a string")
             setattr(s, key, g[key])
+
+    sv = data.get("server", {})
+    if not isinstance(sv, dict):
+        raise ConfigError("[server] must be a table")
+    bad = set(sv) - _SERVER_KEYS
+    if bad:
+        raise ConfigError(f"unknown [server] key(s): {', '.join(sorted(bad))}")
+    if "public_url" in sv:
+        if not isinstance(sv["public_url"], str):
+            raise ConfigError("[server] public_url must be a string")
+        s.server.public_url = check_public_url(sv["public_url"]) if sv["public_url"] else ""
+    for key in ("port", "admin_port"):
+        if key in sv:
+            if not isinstance(sv[key], int) or isinstance(sv[key], bool) or not 1 <= sv[key] <= 65535:
+                raise ConfigError(f"[server] {key} must be a port number (1-65535)")
+            setattr(s.server, key, sv[key])
+    if s.server.port == s.server.admin_port:
+        raise ConfigError("[server] port and admin_port must be different")
+    for key in ("allow_hosts", "oauth_redirect_hosts"):
+        if key in sv:
+            vals = _strlist("server", key, sv[key])
+            if not all(HOST_RE.match(v) for v in vals):
+                raise ConfigError(f"[server] {key} entries must be bare host names (no scheme, port or path)")
+            setattr(s.server, key, vals)
+    for key in ("oauth_enabled", "static_token_enabled"):
+        if key in sv:
+            if not isinstance(sv[key], bool):
+                raise ConfigError(f"[server] {key} must be true or false")
+            setattr(s.server, key, sv[key])
 
     for name, raw in data.get("backends", {}).items():
         if not isinstance(raw, dict):
@@ -216,6 +273,9 @@ def to_data(s: Settings) -> dict:
     out: dict = {}
     if g:
         out["gateway"] = g
+    sv = {k: getattr(s.server, k) for k in sorted(_SERVER_KEYS) if getattr(s.server, k) != getattr(Server(), k)}
+    if sv:
+        out["server"] = sv
     out["backends"] = {n: b.to_dict() for n, b in sorted(s.backends.items()) if b.source == "config"}
     return out
 
