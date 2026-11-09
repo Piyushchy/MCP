@@ -131,10 +131,17 @@ PRE_AUTH = {"/api/setup", "/api/login"}
 
 def _enforced(spec: Spec, auth):
     """Wrap a handler so the session and CSRF rules declared in its Spec are applied here, not left to the handler."""
-    from .session import COOKIE
+    from .api import fail
+    from .session import COOKIE, AuthError
 
     async def handler(request: Request) -> Response:
         request.state.session = None
+        try:
+            return await _run(request)
+        except AuthError as e:
+            return fail(e)
+
+    async def _run(request: Request) -> Response:
         if spec.session:
             sess = auth.get(request.cookies.get(COOKIE)) if auth else None
             if sess is None:
@@ -146,11 +153,14 @@ def _enforced(spec: Spec, auth):
     return handler
 
 
-def make_app(port: int, extra: list[Spec] | None = None, auth=None) -> Starlette:
+def make_app(port: int, extra: list[Spec] | None = None, auth=None, ctx=None) -> Starlette:
     specs = ROUTES + list(extra or [])
     if auth is not None:
         from .api import routes as api_routes
         specs += api_routes(auth)
+    if ctx is not None:
+        from .backends_api import routes as backend_routes
+        specs += backend_routes(ctx)
     routes = [Route(s.path, _enforced(s, auth), methods=list(s.methods)) for s in specs]
 
     async def not_found(request, exc):
@@ -174,10 +184,10 @@ def bind(port: int) -> socket.socket:
 
 
 class AdminServer:
-    def __init__(self, port: int, extra: list[Spec] | None = None, auth=None):
+    def __init__(self, port: int, extra: list[Spec] | None = None, auth=None, ctx=None):
         self.port = port
         self.sock = bind(port)
-        self.server = uvicorn.Server(uvicorn.Config(make_app(port, extra, auth), log_level="warning", lifespan="off"))
+        self.server = uvicorn.Server(uvicorn.Config(make_app(port, extra, auth, ctx), log_level="warning", lifespan="off"))
 
     async def serve(self) -> None:
         await self.server.serve(sockets=[self.sock])

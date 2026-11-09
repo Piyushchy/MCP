@@ -295,7 +295,9 @@ def save(s: Settings, path: Path | str | None = None) -> Path:
     p = Path(path).expanduser() if path else config_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".tmp")
-    tmp.write_text(tomli_w.dumps(to_data(s)))
-    os.chmod(tmp, 0o600)  # the file may name credentials-bearing commands
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)   # private from the first byte
+    with os.fdopen(fd, "w") as f:
+        f.write(tomli_w.dumps(to_data(s)))
+    os.chmod(tmp, 0o600)  # an old tmp file may have had other permissions
     tmp.replace(p)
     return p

@@ -214,12 +214,14 @@ def _auth_store():
     return AuthStore()
 
 
-def _admin(srv, hub):
+def _admin(srv, hub, reloader, args):
     from .admin.app import AdminError, AdminServer
+    from .admin.context import AdminContext
     from .admin.session import AdminAuth
     auth = AdminAuth(_auth_store(), audit=lambda **f: hub.audit.log(**f))
+    ctx = AdminContext(hub, args.config, reloader, hub.secrets, auth)
     try:
-        server = AdminServer(srv.admin_port, auth=auth)
+        server = AdminServer(srv.admin_port, auth=auth, ctx=ctx)
     except AdminError as e:
         raise ConfigError(str(e)) from None
     if auth.state() == "setup":
@@ -297,14 +299,16 @@ def cmd_serve(args) -> int:
         try:
             if args.service:
                 public = serve.make_http_server(app, host, port, token, oauth is not None, verify)
-                serve.run_service(hub, public, _admin(srv, hub), reloader=_reloader(hub, args))
+                rl = _reloader(hub, args)
+                serve.run_service(hub, public, _admin(srv, hub, rl, args), reloader=rl)
             else:
                 serve.run_http(app, hub, host, port, token, oauth=oauth is not None, reloader=_reloader(hub, args), verify=verify)
         except ValueError as e:
             raise ConfigError(str(e)) from None
     elif args.service:
         print(f"mcpgate service: admin UI on http://127.0.0.1:{srv.admin_port} (no remote access configured yet)", file=sys.stderr)
-        serve.run_service(hub, None, _admin(srv, hub), reloader=_reloader(hub, args))
+        rl = _reloader(hub, args)
+        serve.run_service(hub, None, _admin(srv, hub, rl, args), reloader=rl)
     else:
         serve.run_stdio(app, hub, reloader=_reloader(hub, args))
     return 0
