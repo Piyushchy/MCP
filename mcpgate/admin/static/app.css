@@ -33,3 +33,16 @@ select, textarea { width: 100%; box-sizing: border-box; }
 .label { margin: 0 0 .25rem; font-size: .9rem; color: var(--muted); }
 pre.review { white-space: pre-wrap; word-break: break-all; background: color-mix(in srgb, var(--fg) 6%, transparent); padding: .75rem; border-radius: 6px; font: .9rem/1.5 ui-monospace, monospace; }
 @media (max-width: 36rem) { .row3 { grid-template-columns: 1fr; } }
+.policy { margin-top: .75rem; border-top: 1px solid var(--line); padding-top: .75rem; }
+.tools { display: grid; gap: .5rem; margin: .75rem 0; }
+.tool { border: 1px solid var(--line); border-radius: 6px; padding: .5rem .75rem; }
+.tool.changed { border-color: var(--accent); }
+.small { font-size: .85rem; }
+.radios { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: .25rem; }
+.radio { font-size: .9rem; }
+.radio input:disabled + * , .radio:has(input:disabled) { opacity: .5; }
+.chips { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin: .25rem 0; }
+.chip { border: 1px solid var(--line); border-radius: 999px; padding: 0 .5rem; display: inline-flex; gap: .25rem; align-items: center; }
+.chip.gone code { text-decoration: line-through; opacity: .6; }
+button.tiny { padding: 0 .4rem; font-size: .8rem; border-radius: 999px; }
+.summary { max-width: none; }

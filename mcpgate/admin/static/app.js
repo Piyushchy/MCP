@@ -76,6 +76,119 @@ async function act(path, data = {}) {
 const STATE_LABEL = { connected: "Connected", idle: "Idle (starts when used)", error: "Error", disabled: "Disabled" };
 
 const notes = {};   // the last message per backend, kept across refreshes
+const openPolicy = {};   // which permission panels are open, kept across refreshes
+
+const STATE_NAMES = { allow: "Allowed", confirm: "Needs my approval", block: "Blocked" };
+const DELETES = /(^|_)(delete|remove|drop|destroy|wipe|purge|erase|clear|truncate)(_|$)/i;
+
+// Per-tool permissions. Everything from the backend (names, descriptions) is shown with textContent only.
+function policyPanel(b, reloadList) {
+  const box = el("div", { class: "policy" });
+  let saved = null;            // payload for the saved rules
+  let view = null;             // payload with the pending changes applied (server-computed)
+  let pending = {};            // tool -> wanted state
+  let removed = { allow: [], deny: [], confirm: [] };
+  const msg = el("p", { class: "msg", role: "alert" });
+
+  const dirty = () => Object.keys(pending).length > 0 || removed.allow.length + removed.deny.length + removed.confirm.length > 0;
+
+  async function refresh() {
+    if (!dirty()) { view = saved; return draw(); }
+    const r = await api(`/api/backends/${b.name}/policy/preview`, "POST", { changes: pending, remove: removed });
+    if (!r.ok) { msg.textContent = r.body.error || "That did not work."; return; }
+    msg.textContent = "";
+    view = r.body;
+    draw();
+  }
+
+  function setState(tool, st) {
+    const base = saved.tools.find((t) => t.name === tool).state;
+    if (st === base) delete pending[tool]; else pending[tool] = st;
+    refresh();
+  }
+
+  function chips(list, title, key, editable) {
+    if (!list.length) return null;
+    const row = el("div", { class: "chips" }, el("span", { class: "label" }, title + ": "));
+    for (const pat of list) {
+      const gone = removed[key].includes(pat);
+      const chip = el("span", { class: "chip" + (gone ? " gone" : "") }, el("code", {}, pat));
+      if (editable) {
+        const x = el("button", { type: "button", class: "plain tiny", "aria-label": (gone ? "Keep " : "Remove ") + title + " pattern " + pat }, gone ? "undo" : "×");
+        x.addEventListener("click", () => { removed[key] = gone ? removed[key].filter((q) => q !== pat) : [...removed[key], pat]; refresh(); });
+        chip.append(x);
+      }
+      row.append(chip);
+    }
+    return row;
+  }
+
+  function draw() {
+    const kids = [];
+    const rules = saved.rules;
+    const edit = saved.editable;
+    if (!saved.editable) kids.push(el("p", { class: "msg", role: "status" }, saved.why));
+    if (!saved.loaded && b.enabled) {
+      const go = el("button", { type: "button" }, "Load tools");
+      go.addEventListener("click", async () => { go.disabled = true; const r = await act(`/api/backends/${b.name}/policy/load`); saved = r.body; view = saved; pending = {}; removed = { allow: [], deny: [], confirm: [] }; draw(); });
+      kids.push(go);
+    }
+    const ruleBox = el("div", { class: "rules" },
+      chips(rules.allow.length === 1 && rules.allow[0] === "*" ? [] : rules.allow, "Only allow", "allow", edit) || "",
+      chips(rules.deny, "Block", "deny", edit) || "", chips(rules.confirm, "Needs approval", "confirm", edit) || "");
+    if (ruleBox.children.length) kids.push(el("p", { class: "muted" }, "Rules written by hand are kept as they are. Remove one only if it gets in the way."), ruleBox);
+    if (saved.tools.length) {
+      const bulk = el("div", { class: "row" });
+      const bulkBtn = (label, fn) => { const x = el("button", { type: "button", class: "plain" }, label); x.addEventListener("click", fn); bulk.append(x); };
+      if (edit) {
+        bulkBtn("Block everything that deletes", () => { for (const t of view.tools) if ((DELETES.test(t.name) || t.destructive) && t.options.block === null) pending[t.name] = "block"; refresh(); });
+        bulkBtn("Approval for everything not read-only", () => { for (const t of view.tools) if (!t.read_only && t.state === "allow" && t.options.confirm === null) pending[t.name] = "confirm"; refresh(); });
+        bulkBtn("Allow everything that only reads", () => { for (const t of view.tools) if (t.read_only && t.state !== "allow" && t.options.allow === null) pending[t.name] = "allow"; refresh(); });
+      }
+      kids.push(bulk);
+      const list = el("div", { class: "tools" });
+      view.tools.forEach((t, i) => {
+        const changed = t.name in pending;
+        const radios = ["allow", "confirm", "block"].map((st) => {
+          const id = `p-${b.name}-${i}-${st}`;
+          const input = el("input", { type: "radio", id, name: `p-${b.name}-${i}`, value: st });
+          input.checked = t.state === st;
+          input.disabled = !edit || (t.options[st] !== null && t.state !== st);
+          if (t.options[st]) input.title = t.options[st];
+          input.addEventListener("change", () => setState(t.name, st));
+          return el("label", { class: "radio", for: id, title: t.options[st] || "" }, input, " " + STATE_NAMES[st]);
+        });
+        list.append(el("div", { class: "tool" + (changed ? " changed" : "") },
+          el("div", {}, el("strong", {}, t.name), " ", t.read_only ? el("span", { class: "pill" }, "read-only") : "", t.destructive ? el("span", { class: "pill error" }, "destructive") : "", changed ? el("span", { class: "pill" }, "changed") : ""),
+          t.description ? el("div", { class: "muted small" }, t.description) : "", t.reason ? el("div", { class: "muted small" }, t.reason) : "",
+          el("div", { class: "radios", role: "radiogroup", "aria-label": "Permission for " + t.name }, ...radios)));
+      });
+      kids.push(list);
+      const names = (xs) => (xs.length ? xs.join(", ") : "none");
+      kids.push(el("div", { class: "card summary" }, el("strong", {}, `The model will see ${view.model_sees.length} of ${view.tools.length} tools`),
+        el("p", { class: "muted small" }, "Needs your approval: " + names(view.needs_approval)), el("p", { class: "muted small" }, "Hidden from the model: " + names(view.hidden))));
+      if (edit) {
+        const save = el("button", { type: "button" }, "Save permissions");
+        save.disabled = !dirty();
+        save.addEventListener("click", async () => {
+          save.disabled = true;
+          const r = await act(`/api/backends/${b.name}/policy/save`, { changes: pending, remove: removed });
+          if (!r.ok) { msg.textContent = r.body.error || "Failed."; save.disabled = false; return; }
+          saved = view = r.body; pending = {}; removed = { allow: [], deny: [], confirm: [] }; msg.textContent = ""; draw(); reloadList();
+        });
+        const discard = el("button", { type: "button", class: "plain" }, "Discard changes");
+        discard.disabled = !dirty();
+        discard.addEventListener("click", () => { pending = {}; removed = { allow: [], deny: [], confirm: [] }; msg.textContent = ""; refresh(); });
+        kids.push(el("div", { class: "row" }, save, discard));
+      }
+    }
+    kids.push(msg);
+    box.replaceChildren(...kids);
+  }
+
+  (async () => { const r = await api(`/api/backends/${b.name}/policy`); saved = view = r.body; draw(); })();
+  return box;
+}
 
 function backendCard(b, reload) {
   const last = notes[b.name] || { t: "", bad: false };
@@ -115,6 +228,14 @@ function backendCard(b, reload) {
       if (r.ok) { delete notes[b.name]; reload(); } else say(r.body.error || "Failed.", true);
     }, "danger"));
   }
+  const panelBox = el("div", {});
+  const perm = btn("Permissions", async () => {
+    if (panelBox.firstChild) { panelBox.replaceChildren(); delete openPolicy[b.name]; return; }
+    openPolicy[b.name] = true;
+    panelBox.replaceChildren(policyPanel(b, reload));
+  });
+  buttons.push(perm);
+  if (openPolicy[b.name]) panelBox.replaceChildren(policyPanel(b, reload));
   const meta = [b.transport, b.source, b.target].filter(Boolean).join(" · ");
   const tools = b.tools_visible === null ? "tools: not loaded yet" : `tools: ${b.tools_visible} visible${b.tools_hidden ? `, ${b.tools_hidden} hidden` : ""}`;
   const secrets = b.secrets.length ? "secrets: " + b.secrets.map((x) => `${x.name} (${x.set ? "set" : "NOT set"})`).join(", ") : "";
@@ -124,7 +245,7 @@ function backendCard(b, reload) {
     el("p", { class: "muted" }, meta), el("p", { class: "muted" }, tools + (secrets ? " · " + secrets : "")),
     b.path ? el("p", { class: "muted" }, "File: " + b.path + " (drop-in, managed as a file)") : "",
     b.error ? el("p", { class: "msg" }, b.error) : "",
-    el("div", { class: "row" }, ...buttons), note);
+    el("div", { class: "row" }, ...buttons), note, panelBox);
 }
 
 async function backendsSection() {
