@@ -65,7 +65,7 @@ async def test_dropin_listed_read_only_with_path(tmp_path):
 
 
 async def test_disable_then_enable_needs_stepup_for_commands(tmp_path):
-    async with rig(tmp_path) as r:
+    async with rig(tmp_path, custom=True) as r:
         assert (await r.post("/api/backends/demo/disable")).json()["state"] == "disabled"
         assert "enabled = false" in r.file_text()
         resp = await r.post("/api/backends/demo/enable")

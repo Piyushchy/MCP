@@ -91,7 +91,7 @@ def cmd_add(args) -> int:
     if args.url:
         if command:
             raise ConfigError("give either --url or a command, not both")
-        b.transport, b.url = ("sse" if args.sse else "http"), args.url
+        b.transport, b.url = ("sse" if args.sse else "http"), cfgmod.check_backend_url(args.url)
         b.headers = _kv(args.header, "--header")
     else:
         if not command:

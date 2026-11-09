@@ -29,7 +29,7 @@ async def body(request: Request) -> dict:
 
 def fail(e: AuthError) -> Response:
     headers = {"retry-after": str(e.retry_after)} if e.retry_after else {}
-    return JSONResponse({"error": e.message}, status_code=e.status, headers=headers)
+    return JSONResponse({"error": e.message, **e.extra}, status_code=e.status, headers=headers)
 
 
 def with_cookie(resp: Response, cookie: str) -> Response:

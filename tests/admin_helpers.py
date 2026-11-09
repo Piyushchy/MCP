@@ -57,9 +57,11 @@ class Rig:
 
 
 @asynccontextmanager
-async def rig(tmp_path, backends=None, secrets=None):
+async def rig(tmp_path, backends=None, secrets=None, custom=False):
     path = tmp_path / "config.toml"
-    cfgmod.save(Settings(audit_log=str(tmp_path / "audit.jsonl"), backends=backends if backends is not None else {"demo": demo()}), path)
+    settings = Settings(audit_log=str(tmp_path / "audit.jsonl"), backends=backends if backends is not None else {"demo": demo()})
+    settings.server.allow_custom_commands = custom
+    cfgmod.save(settings, path)
     store = SecretStore(tmp_path / "secrets.json")
     for k, v in (secrets or {}).items():
         store.set(k, v)

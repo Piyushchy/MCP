@@ -68,6 +68,7 @@ class Backend:
     start_timeout: float = 30.0      # seconds to wait for the server to start (first runs of npx/uvx download packages)
     description: str = ""
     source: str = "config"  # "config" or "custom" (a drop-in file)
+    preset: str = ""        # id of the shipped preset this backend was made from ("" = hand-written or custom command)
 
     def connection_key(self) -> tuple:
         """Everything that decides how the server is started or reached. If this is unchanged, a reload
@@ -124,7 +125,29 @@ class Backend:
             d["start_timeout"] = self.start_timeout
         if self.description:
             d["description"] = self.description
+        if self.preset:
+            d["preset"] = self.preset
         return d
+
+
+def check_backend_url(url: str) -> str:
+    """The address of a remote MCP server: https (http only for this computer), no embedded credentials,
+    no other schemes. Addresses that still contain a ${NAME} are checked when they are expanded."""
+    from urllib.parse import urlparse
+    url = url.strip()
+    if "${" in url:
+        return url
+    if len(url) > 2000 or any(c in url for c in "\r\n\x00 "):
+        raise ConfigError("that address is not valid")
+    u = urlparse(url)
+    local = u.hostname in ("localhost", "127.0.0.1", "::1")
+    if u.scheme != "https" and not (u.scheme == "http" and local):
+        raise ConfigError("the address must start with https:// (http:// is only allowed for localhost)")
+    if not u.hostname:
+        raise ConfigError("the address needs a host name")
+    if u.username or u.password:
+        raise ConfigError("do not put a user name or password in the address; use a header and mark it secret")
+    return url
 
 
 HOST_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$")
@@ -151,6 +174,7 @@ class Server:
     oauth_enabled: bool = False
     oauth_redirect_hosts: list[str] = field(default_factory=list)
     static_token_enabled: bool = False
+    allow_custom_commands: bool = False   # the admin UI may create or enable programs that run on this computer
 
 
 @dataclass
@@ -165,9 +189,10 @@ class Settings:
 
 
 _GATEWAY_KEYS = {"cache_ttl", "tools_ttl", "max_result_chars", "audit_log", "custom_dir"}
-_SERVER_KEYS = {"public_url", "port", "admin_port", "allow_hosts", "oauth_enabled", "oauth_redirect_hosts", "static_token_enabled"}
+_SERVER_KEYS = {"public_url", "port", "admin_port", "allow_hosts", "oauth_enabled", "oauth_redirect_hosts", "static_token_enabled",
+                "allow_custom_commands"}
 _BACKEND_KEYS = {"transport", "command", "args", "env", "cwd", "url", "headers", "allow", "deny",
-                 "confirm", "enabled", "timeout", "start_timeout", "description"}
+                 "confirm", "enabled", "timeout", "start_timeout", "description", "preset"}
 
 
 def _strlist(name: str, key: str, v) -> list[str]:
@@ -229,7 +254,7 @@ def parse(data: dict) -> Settings:
             if not all(HOST_RE.match(v) for v in vals):
                 raise ConfigError(f"[server] {key} entries must be bare host names (no scheme, port or path)")
             setattr(s.server, key, vals)
-    for key in ("oauth_enabled", "static_token_enabled"):
+    for key in ("oauth_enabled", "static_token_enabled", "allow_custom_commands"):
         if key in sv:
             if not isinstance(sv[key], bool):
                 raise ConfigError(f"[server] {key} must be true or false")

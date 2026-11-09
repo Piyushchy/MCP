@@ -5,7 +5,7 @@ let csrf = "";
 
 function el(tag, attrs, ...kids) {
   const n = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs || {})) n.setAttribute(k, v);
+  for (const [k, v] of Object.entries(attrs || {})) if (v !== null && v !== undefined) n.setAttribute(k, v);
   n.append(...kids);
   return n;
 }
@@ -139,6 +139,152 @@ async function backendsSection() {
     box.replaceChildren(...kids);
   }
   await load();
+  box.reload = load;
+  return box;
+}
+
+// ---- adding a backend -------------------------------------------------------------------------
+function rowsEditor(title, nameLabel) {
+  const list = el("div", { class: "rows" });
+  const rows = [];
+  function addRow() {
+    const name = el("input", { type: "text", "aria-label": nameLabel + " name", autocomplete: "off", spellcheck: "false", placeholder: nameLabel });
+    const value = el("input", { type: "text", "aria-label": nameLabel + " value", autocomplete: "off", spellcheck: "false", placeholder: "value" });
+    const box = el("input", { type: "checkbox", "aria-label": "this value is secret" });
+    box.addEventListener("change", () => { value.type = box.checked ? "password" : "text"; });
+    const row = el("div", { class: "row3" }, name, value, el("label", { class: "check" }, box, " secret"));
+    rows.push({ name, value, box, row });
+    list.append(row);
+  }
+  addRow();
+  const more = el("button", { type: "button", class: "plain" }, "Add another");
+  more.addEventListener("click", addRow);
+  return { node: el("div", { class: "field" }, el("p", { class: "label" }, title), list, more),
+    get: () => rows.filter((r) => r.name.value.trim()).map((r) => ({ name: r.name.value.trim(), value: r.value.value, secret: r.box.checked })) };
+}
+
+function textField(label, name, extra = {}) { return field(label, name, "text", { autocomplete: "off", ...extra }); }
+
+async function addSection(reloadList, goSettings) {
+  const box = el("section", { "aria-labelledby": "add" });
+  const { body: info } = await api("/api/presets");
+  let current = null;
+  const out = el("div", {});
+
+  function show(...kids) { out.replaceChildren(...kids); }
+  const choose = el("div", { class: "row" });
+  const pick = (label, fn) => { const b = el("button", { type: "button", class: "plain" }, label); b.addEventListener("click", fn); choose.append(b); };
+
+  function reviewScreen(payload, formNode, onError) {
+    const msg = el("p", { class: "msg", role: "alert" });
+    const done = el("p", { class: "note", role: "status" });
+    const lines = [];
+    return async () => {
+      msg.textContent = "";
+      const r = await api("/api/backends/preview", "POST", payload());
+      if (!r.ok) { onError(r.body.error || "That did not work."); return false; }
+      const v = r.body;
+      lines.length = 0;
+      lines.push(v.runs_program ? "This runs a program on this computer:" : "This connects to:", "  " + v.target);
+      if (v.cwd) lines.push("Working folder: " + v.cwd);
+      for (const h of v.headers) lines.push(`Header ${h.name}: ${h.value}`);
+      for (const e of v.env) lines.push(`Environment ${e.name}=${e.value}`);
+      for (const x of v.secrets) lines.push(x.action === "store" ? `Secret ${x.name}: will be stored (write-only)` : `Secret ${x.name}: already stored, will be reused`);
+      lines.push(`Name: ${v.name}`);
+      const pre = el("pre", { class: "review", tabindex: "0" }, lines.join("\n"));
+      const add = el("button", { type: "button" }, "Add backend");
+      const back = el("button", { type: "button", class: "plain" }, "Back");
+      back.addEventListener("click", () => show(formNode));
+      add.addEventListener("click", async () => {
+        add.disabled = true; done.textContent = "Adding…";
+        const res = await act("/api/backends/add", { ...payload(), confirm: true });
+        if (!res.ok) { done.textContent = ""; msg.textContent = res.body.error || "That did not work."; add.disabled = false; return; }
+        done.textContent = "Added. Testing the connection…";
+        reloadList();
+        const t = await act(`/api/backends/${res.body.backend.name}/test`);
+        done.textContent = t.body.ok ? `Works: ${t.body.tools} tools found${t.body.names.length ? ": " + t.body.names.slice(0, 12).join(", ") + (t.body.names.length > 12 ? ", …" : "") : ""}.` : `Added, but the connection failed: ${t.body.error || "unknown error"}`;
+        reloadList();
+        back.remove(); add.remove();
+      });
+      show(el("div", { class: "card" }, el("h3", {}, "Review"), el("p", { class: "muted" }, "This is exactly what will be saved."), pre, el("div", { class: "row" }, add, back), msg, done));
+      return true;
+    };
+  }
+
+  function presetForm(p) {
+    const fields = [textField("Name", "name", { value: p.name })];
+    for (const f of p.fields) fields.push(field(f.label + (f.already_set ? " (already stored: leave empty to keep it)" : ""), "v_" + f.id, "password", { required: f.already_set ? null : "" }), el("p", { class: "muted" }, f.help));
+    const msg = el("p", { class: "msg", role: "alert" });
+    const f = el("form", { class: "card" }, el("h3", {}, p.title), el("p", { class: "muted" }, p.description),
+      p.runs_program ? el("p", { class: "muted" }, "This one runs a program on this computer, so you will be asked for your passphrase when you add it.") : "", ...fields.map((n) => n),
+      el("button", { type: "submit" }, "Review"), msg);
+    const payload = () => { const fd = new FormData(f); const values = {}; for (const x of p.fields) values[x.id] = fd.get("v_" + x.id) || ""; return { kind: "preset", preset: p.id, name: fd.get("name"), values }; };
+    f.addEventListener("submit", async (ev) => { ev.preventDefault(); msg.textContent = ""; await reviewScreen(payload, f, (t) => { msg.textContent = t; })(); });
+    return f;
+  }
+
+  function remoteForm() {
+    const headers = rowsEditor("Headers (for example Authorization). Tick “secret” for anything private.", "Header");
+    const sel = el("select", { name: "transport", id: "f-transport" }, el("option", { value: "http" }, "HTTP (streamable)"), el("option", { value: "sse" }, "SSE"));
+    const msg = el("p", { class: "msg", role: "alert" });
+    const f = el("form", { class: "card" }, el("h3", {}, "Remote MCP server"), el("p", { class: "muted" }, "Any MCP server reachable by a web address. It must be https, except localhost."),
+      textField("Name", "name"), el("div", { class: "field" }, el("label", { for: "f-transport" }, "Transport"), sel), textField("Address (URL)", "url", { placeholder: "https://example.com/mcp" }),
+      textField("Description (optional)", "description", { required: null }), textField("Start timeout, seconds", "start_timeout", { value: "30", inputmode: "numeric" }), headers.node,
+      el("button", { type: "submit" }, "Review"), msg);
+    const payload = () => { const fd = new FormData(f); return { kind: "remote", name: fd.get("name"), transport: fd.get("transport"), url: fd.get("url"), description: fd.get("description"), start_timeout: Number(fd.get("start_timeout")) || undefined, headers: headers.get() }; };
+    f.addEventListener("submit", async (ev) => { ev.preventDefault(); msg.textContent = ""; await reviewScreen(payload, f, (t) => { msg.textContent = t; })(); });
+    return f;
+  }
+
+  function commandForm() {
+    if (!info.custom_commands) {
+      const go = el("button", { type: "button", class: "plain" }, "Open settings");
+      go.addEventListener("click", goSettings);
+      return el("div", { class: "card" }, el("h3", {}, "Custom command"), el("p", {}, "Custom commands are switched off. Turning them on lets whoever controls this page run programs on this computer as you, so it asks for your passphrase and a typed confirmation."), go);
+    }
+    const env = rowsEditor("Environment values. Tick “secret” for anything private.", "Variable");
+    const msg = el("p", { class: "msg", role: "alert" });
+    const args = el("textarea", { name: "args", id: "f-args", rows: "3", spellcheck: "false", autocomplete: "off" });
+    const f = el("form", { class: "card" }, el("h3", {}, "Custom command"), el("p", { class: "muted" }, "Runs a program on this computer as your user, started when the gateway needs it."),
+      textField("Name", "name"), textField("Command", "command", { placeholder: "npx" }), el("div", { class: "field" }, el("label", { for: "f-args" }, "Arguments (one per line)"), args),
+      env.node, textField("Working folder (optional)", "cwd", { required: null }), textField("Description (optional)", "description", { required: null }), textField("Start timeout, seconds", "start_timeout", { value: "30", inputmode: "numeric" }),
+      el("button", { type: "submit" }, "Review"), msg);
+    const payload = () => { const fd = new FormData(f); return { kind: "command", name: fd.get("name"), command: fd.get("command"), args: String(fd.get("args")).split("\n").map((x) => x.trim()).filter(Boolean), cwd: fd.get("cwd"), description: fd.get("description"), start_timeout: Number(fd.get("start_timeout")) || undefined, env: env.get() }; };
+    f.addEventListener("submit", async (ev) => { ev.preventDefault(); msg.textContent = ""; await reviewScreen(payload, f, (t) => { msg.textContent = t; })(); });
+    return f;
+  }
+
+  for (const p of info.presets) pick(p.title, () => show(presetForm(p)));
+  pick("Remote server (URL)", () => show(remoteForm()));
+  pick("Custom command", () => show(commandForm()));
+  box.append(el("h2", { id: "add" }, "Add a backend"), el("p", { class: "muted" }, "Pick what to connect. Tokens go to a write-only store, never into the config file."), choose, out);
+  return box;
+}
+
+async function settingsSection(reloadAll) {
+  const box = el("section", { "aria-labelledby": "set" });
+  async function load() {
+    const { body: s } = await api("/api/settings");
+    const msg = el("p", { class: "msg", role: "alert" });
+    const kids = [el("h2", { id: "set" }, "Settings"), el("h3", {}, "Custom commands"),
+      el("p", {}, s.custom_commands ? "On: this page can add and enable programs that run on this computer." : "Off: this page can only add presets and remote servers.")];
+    if (s.custom_commands) {
+      const off = el("button", { type: "button", class: "plain" }, "Turn off");
+      off.addEventListener("click", async () => { const r = await act("/api/settings/custom-commands", { enabled: false }); if (r.ok) { await load(); reloadAll(); } else msg.textContent = r.body.error || "Failed."; });
+      kids.push(off);
+    } else {
+      const f = el("form", { class: "card" }, el("p", {}, "Turning this on lets whoever controls this page run programs on this computer as you. Only do it if you need a server that is not a preset."),
+        field("Type ALLOW PROGRAMS to confirm", "confirm", "text", { autocomplete: "off", spellcheck: "false" }), el("button", { type: "submit" }, "Turn on"), msg);
+      f.addEventListener("submit", async (ev) => {
+        ev.preventDefault();
+        const r = await act("/api/settings/custom-commands", { enabled: true, confirm: new FormData(f).get("confirm") });
+        if (r.ok) { await load(); reloadAll(); } else msg.textContent = r.body.error || "Failed.";
+      });
+      kids.push(f);
+    }
+    box.replaceChildren(...kids);
+  }
+  await load();
   return box;
 }
 
@@ -160,7 +306,10 @@ async function render() {
   } else {
     const out = el("button", { type: "button" }, "Sign out");
     out.addEventListener("click", async () => { await api("/api/logout", "POST", {}); csrf = ""; await render(); });
-    page(el("p", {}, "You are signed in."), out, await backendsSection(),
+    const bk = await backendsSection();
+    const settings = await settingsSection(() => render());
+    const add = await addSection(() => bk.reload(), () => settings.scrollIntoView());
+    page(el("p", {}, "You are signed in."), out, bk, add, settings,
       form("Change passphrase", "", [field("Current passphrase", "current"), field("New passphrase (12+ characters)", "new", "password", { minlength: "12" })], "Change",
         async (v) => after(await api("/api/passphrase", "POST", { current: v.current, new: v.new }))));
   }

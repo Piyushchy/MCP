@@ -10,6 +10,7 @@ from starlette.responses import JSONResponse, Response
 
 from ..backends import Backend as Conn
 from ..config import NAME_RE
+from . import addbackend
 from .api import body
 from .app import Spec
 from .context import AdminContext
@@ -61,6 +62,8 @@ def routes(ctx: AdminContext) -> list[Spec]:
     async def set_enabled(request: Request, on: bool) -> Response:
         b = find(request)
         need_editable(b)
+        if on and b.cfg.transport == "stdio" and not b.cfg.preset and not ctx.hub.settings.server.allow_custom_commands:
+            raise AuthError(403, "custom command backends are switched off. Turn them on in Settings first.", extra={"switch": True})
         if on and b.cfg.transport == "stdio" and not ctx.auth.stepup_ok(request.state.session):
             return JSONResponse({"error": "re-enter your passphrase to enable a program that runs on this computer", "stepup": True}, status_code=403)
 
@@ -85,7 +88,8 @@ def routes(ctx: AdminContext) -> list[Spec]:
         try:
             tools = await asyncio.wait_for(conn.tools(refresh=True), conn.start_timeout + 5)
             visible = sum(1 for t in tools if ctx.hub.policies[b.name].visible(t.name))
-            result = {"ok": True, "tools": len(tools), "visible": visible, "hidden": len(tools) - visible}
+            result = {"ok": True, "tools": len(tools), "visible": visible, "hidden": len(tools) - visible,
+                      "names": [t.name for t in tools][:100]}
         except asyncio.TimeoutError:
             result = {"ok": False, "error": f"did not answer within {conn.start_timeout + 5:.0f} seconds"}
         except Exception as e:  # noqa: BLE001 - shown to the admin, scrubbed
@@ -139,9 +143,71 @@ def routes(ctx: AdminContext) -> list[Spec]:
         ctx.audit(event="admin_backend_remove", backend=b.name, secrets_deleted=deleted)
         return JSONResponse({"removed": b.name, "secrets_deleted": deleted})
 
+    async def preset_list(request: Request) -> Response:
+        out = []
+        for p in addbackend.presets().values():
+            fields = [{"id": f["id"], "label": f["label"], "help": f.get("help", ""), "secret_name": f["secret"],
+                       "already_set": ctx.secrets.has(f["secret"])} for f in p["fields"]]
+            out.append({"id": p["id"], "title": p["title"], "description": p["description"], "name": p["name"],
+                        "runs_program": p["backend"]["transport"] == "stdio", "fields": fields})
+        return JSONResponse({"presets": out, "custom_commands": ctx.hub.settings.server.allow_custom_commands})
+
+    async def preview(request: Request) -> Response:
+        return JSONResponse(addbackend.plan(ctx, await body(request)).view())
+
+    async def add(request: Request) -> Response:
+        d = await body(request)
+        plan = addbackend.plan(ctx, d)
+        if d.get("confirm") is not True:
+            raise AuthError(400, "confirmation required")
+        if plan.runs_program and not ctx.auth.stepup_ok(request.state.session):
+            return JSONResponse({"error": "re-enter your passphrase to add a program that runs on this computer", "stepup": True}, status_code=403)
+        before = {n: ctx.secrets.get(n) for n in plan.secrets}
+        for n, v in plan.secrets.items():
+            ctx.secrets.set(n, v)
+
+        def change(s):
+            if plan.backend.name in s.backends:
+                raise AuthError(409, f"there is already a backend called {plan.backend.name}")
+            s.backends[plan.backend.name] = plan.backend
+        try:
+            await ctx.edit(change)
+        except AuthError:
+            for n, old in before.items():      # put the secrets back the way they were
+                ctx.secrets.set(n, old) if old else ctx.secrets.delete(n)
+            raise
+        ctx.audit(event="admin_backend_add", backend=plan.backend.name, kind=plan.kind, preset=plan.backend.preset,
+                  secrets_stored=sorted(plan.secrets))
+        return JSONResponse({"backend": row(ctx, ctx.hub.backends[plan.backend.name])})
+
+    async def settings_get(request: Request) -> Response:
+        return JSONResponse({"custom_commands": ctx.hub.settings.server.allow_custom_commands})
+
+    async def settings_commands(request: Request) -> Response:
+        d = await body(request)
+        on = d.get("enabled")
+        if not isinstance(on, bool):
+            raise AuthError(400, "enabled must be true or false")
+        if on:
+            if not ctx.auth.stepup_ok(request.state.session):
+                return JSONResponse({"error": "re-enter your passphrase to allow programs to be added", "stepup": True}, status_code=403)
+            if d.get("confirm") != "ALLOW PROGRAMS":
+                raise AuthError(400, "type ALLOW PROGRAMS to confirm")
+
+        def change(s):
+            s.server.allow_custom_commands = on
+        await ctx.edit(change)
+        ctx.audit(event="admin_custom_commands_on" if on else "admin_custom_commands_off")
+        return JSONResponse({"custom_commands": ctx.hub.settings.server.allow_custom_commands})
+
     P = "/api/backends/{name}"
     return [
         Spec("/api/backends", ("GET",), listing),
+        Spec("/api/presets", ("GET",), preset_list),
+        Spec("/api/backends/preview", ("POST",), preview, csrf=True),
+        Spec("/api/backends/add", ("POST",), add, csrf=True),
+        Spec("/api/settings", ("GET",), settings_get),
+        Spec("/api/settings/custom-commands", ("POST",), settings_commands, csrf=True),
         Spec(f"{P}/impact", ("GET",), removal_impact),
         Spec(f"{P}/enable", ("POST",), enable, csrf=True),
         Spec(f"{P}/disable", ("POST",), disable, csrf=True),

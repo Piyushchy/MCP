@@ -19,9 +19,9 @@ _ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"   # no 0/O/1/I
 
 
 class AuthError(Exception):
-    def __init__(self, status: int, message: str, retry_after: int | None = None):
+    def __init__(self, status: int, message: str, retry_after: int | None = None, extra: dict | None = None):
         super().__init__(message)
-        self.status, self.message, self.retry_after = status, message, retry_after
+        self.status, self.message, self.retry_after, self.extra = status, message, retry_after, extra or {}
 
 
 class Limiter:

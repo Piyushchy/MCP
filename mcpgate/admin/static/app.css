@@ -25,3 +25,11 @@ dialog.card { background: var(--bg); color: var(--fg); }
 dialog::backdrop { background: rgba(0, 0, 0, .5); }
 @media (prefers-color-scheme: dark) { .pill.connected { color: #81c784; border-color: #81c784; } .pill.error, button.danger { color: #ff8a80; border-color: #ff8a80; } }
 .note { color: var(--muted); min-height: 1.5em; }
+.rows { display: grid; gap: .5rem; }
+.row3 { display: grid; grid-template-columns: 1fr 1.5fr auto; gap: .5rem; align-items: center; }
+.row3 input, select, textarea { padding: .5rem; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; min-width: 0; }
+select, textarea { width: 100%; box-sizing: border-box; }
+.check { white-space: nowrap; color: var(--muted); font-size: .9rem; }
+.label { margin: 0 0 .25rem; font-size: .9rem; color: var(--muted); }
+pre.review { white-space: pre-wrap; word-break: break-all; background: color-mix(in srgb, var(--fg) 6%, transparent); padding: .75rem; border-radius: 6px; font: .9rem/1.5 ui-monospace, monospace; }
+@media (max-width: 36rem) { .row3 { grid-template-columns: 1fr; } }

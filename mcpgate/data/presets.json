@@ -1,0 +1,34 @@
+{
+  "presets": [
+    {
+      "id": "github",
+      "title": "GitHub",
+      "description": "GitHub's own hosted MCP server (repositories, issues, pull requests). It needs a personal access token.",
+      "name": "github",
+      "backend": {
+        "transport": "http",
+        "url": "https://api.githubcopilot.com/mcp/",
+        "headers": {"Authorization": "Bearer ${GITHUB_TOKEN}"},
+        "description": "GitHub: repositories, issues, pull requests"
+      },
+      "fields": [
+        {"id": "token", "label": "GitHub personal access token", "secret": "GITHUB_TOKEN",
+         "help": "Create one at github.com/settings/tokens and give it only the access you need. It is stored write-only and never shown again."}
+      ]
+    },
+    {
+      "id": "colab",
+      "title": "Google Colab",
+      "description": "Google's Colab MCP server. It runs on this computer through uvx, which downloads it the first time.",
+      "name": "colab",
+      "backend": {
+        "transport": "stdio",
+        "command": "uvx",
+        "args": ["git+https://github.com/googlecolab/colab-mcp"],
+        "start_timeout": 120,
+        "description": "Google Colab notebooks"
+      },
+      "fields": []
+    }
+  ]
+}
