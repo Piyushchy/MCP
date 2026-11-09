@@ -289,7 +289,12 @@ def cmd_serve(args) -> int:
         sec = serve.transport_security(list(args.allow_host or []) + list(srv.allow_hosts))
         kwargs = {"host": host, "port": port, **({"transport_security": sec} if sec else {})}
     from .hub import Hub
-    app, hub = build(s, hub=Hub(s, secrets=_secrets()), oauth=oauth, **kwargs)
+    hub = Hub(s, secrets=_secrets())
+    if args.service:
+        # The owner approves risky calls in the admin UI, so the model is never handed an approval code.
+        from .approvals import Approvals
+        hub.approvals = Approvals(audit=lambda **f: hub.audit.log(**f), scrub=hub._scrub)
+    app, hub = build(s, hub=hub, oauth=oauth, **kwargs)
     if args.http:
         how = ("OAuth (passphrase approval)" + (" and static token" if (token or verify) else "")) if oauth else (
             "token required" if (token or verify) else "no token, loopback only")

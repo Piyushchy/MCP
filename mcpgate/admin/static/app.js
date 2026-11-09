@@ -409,6 +409,77 @@ async function settingsSection(reloadAll) {
   return box;
 }
 
+// ---- approvals inbox ----------------------------------------------------------------------------
+let pollTimer = null;
+
+async function approvalsSection() {
+  const box = el("section", { id: "approvals", "aria-labelledby": "ap" });
+  const badge = el("a", { href: "#approvals", class: "badge", "aria-label": "Approvals waiting" }, "Approvals: 0");
+  const live = el("p", { class: "sr", "aria-live": "polite" });
+  let sig = "";
+  let lastCount = 0;
+
+  async function decide(id, action, data, note) {
+    const r = await api(`/api/approvals/${id}/${action}`, "POST", data || {});
+    if (!r.ok) note.textContent = r.body.error || "That did not work.";
+    await refresh();
+  }
+
+  function card(p) {
+    const note = el("p", { class: "msg", role: "alert" });
+    const when = el("span", { class: "muted small", "data-id": p.id }, "");
+    when.textContent = `asked ${p.requested_ago}s ago · expires in ${p.expires_in}s`;
+    const once = el("button", { type: "button" }, "Approve once");
+    once.addEventListener("click", () => decide(p.id, "approve", {}, note));
+    const sel = el("select", { "aria-label": "Approve this exact call for a while" }, el("option", { value: "" }, "Approve for…"),
+      el("option", { value: "5" }, "5 minutes"), el("option", { value: "15" }, "15 minutes"), el("option", { value: "60" }, "1 hour"));
+    sel.addEventListener("change", () => { if (sel.value) decide(p.id, "approve", { minutes: Number(sel.value) }, note); });
+    const deny = el("button", { type: "button", class: "danger" }, "Deny");
+    deny.addEventListener("click", () => decide(p.id, "deny", {}, note));
+    return el("article", { class: "card pending", "data-id": p.id },
+      el("h3", {}, p.tool), when,
+      el("p", { class: "muted small" }, "The model asked to run this with exactly these arguments (secret-looking values are hidden):"),
+      el("pre", { class: "review", tabindex: "0" }, p.args + (p.args_cut ? "\n… (cut for display)" : "")),
+      el("div", { class: "row" }, once, sel, deny), note);
+  }
+
+  function draw(d) {
+    const kids = [el("h2", { id: "ap" }, "Approvals")];
+    if (!d.available) kids.push(el("p", { class: "muted" }, "Risky tools are approved here when mcpgate runs as the service (mcpgate serve --service)."));
+    else if (!d.pending.length) kids.push(el("p", { class: "muted" }, "Nothing is waiting for you."));
+    for (const p of d.pending) kids.push(card(p));
+    if (d.recent.length) {
+      kids.push(el("details", {}, el("summary", {}, "Recent decisions"),
+        el("ul", {}, ...d.recent.map((h) => el("li", {}, `${h.tool}: ${h.state}${h.minutes ? ` for ${h.minutes} min` : ""} (${h.ago}s ago)`)))));
+    }
+    box.replaceChildren(...kids);
+  }
+
+  async function refresh() {
+    const r = await api("/api/approvals");
+    if (!r.ok) return;
+    const d = r.body;
+    const next = d.pending.map((p) => p.id).join(",") + "|" + d.recent.map((h) => h.id + h.state).join(",");
+    if (next !== sig) { sig = next; draw(d); }
+    else for (const p of d.pending) {   // only the countdowns change; leave forms and focus alone
+      const w = box.querySelector(`span[data-id="${p.id}"]`);
+      if (w) w.textContent = `asked ${p.requested_ago}s ago · expires in ${p.expires_in}s`;
+    }
+    badge.textContent = `Approvals: ${d.count}`;
+    badge.classList.toggle("alert", d.count > 0);
+    document.title = (d.count ? `(${d.count}) ` : "") + "mcpgate admin";
+    if (d.count > lastCount) live.textContent = `${d.count} approval${d.count > 1 ? "s" : ""} waiting`;
+    lastCount = d.count;
+  }
+  await refresh();
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(() => { if (!document.hidden) refresh(); }, 3000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+  box.badge = badge;
+  box.live = live;
+  return box;
+}
+
 async function after(r) {
   if (!r.ok) return r.body.error || "Something went wrong.";
   await render();
@@ -416,6 +487,7 @@ async function after(r) {
 }
 
 async function render() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   const { body: s } = await api("/api/session");
   csrf = s.csrf || "";
   if (s.state === "setup") {
@@ -426,13 +498,15 @@ async function render() {
     page(form("Sign in", "", [field("Admin passphrase", "passphrase")], "Sign in", async (v) => after(await api("/api/login", "POST", { passphrase: v.passphrase }))));
   } else {
     const out = el("button", { type: "button" }, "Sign out");
-    out.addEventListener("click", async () => { await api("/api/logout", "POST", {}); csrf = ""; await render(); });
+    out.addEventListener("click", async () => { await api("/api/logout", "POST", {}); csrf = ""; document.title = "mcpgate admin"; await render(); });
+    const approvals = await approvalsSection();
     const bk = await backendsSection();
     const settings = await settingsSection(() => render());
     const add = await addSection(() => bk.reload(), () => settings.scrollIntoView());
-    page(el("p", {}, "You are signed in."), out, bk, add, settings,
+    page(el("p", {}, "You are signed in."), out, approvals, bk, add, settings,
       form("Change passphrase", "", [field("Current passphrase", "current"), field("New passphrase (12+ characters)", "new", "password", { minlength: "12" })], "Change",
         async (v) => after(await api("/api/passphrase", "POST", { current: v.current, new: v.new }))));
+    root.querySelector("h1").after(approvals.badge, approvals.live);
   }
 }
 

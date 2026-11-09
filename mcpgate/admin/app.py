@@ -163,6 +163,8 @@ def make_app(port: int, extra: list[Spec] | None = None, auth=None, ctx=None) ->
         specs += backend_routes(ctx)
         from .policy_api import routes as policy_routes
         specs += policy_routes(ctx)
+        from .approvals_api import routes as approval_routes
+        specs += approval_routes(ctx)
     routes = [Route(s.path, _enforced(s, auth), methods=list(s.methods)) for s in specs]
 
     async def not_found(request, exc):

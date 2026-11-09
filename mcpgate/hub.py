@@ -9,6 +9,7 @@ import time
 
 from mcp.types import ContentBlock, ImageContent, TextContent
 
+from .approvals import Refused
 from .audit import Audit
 from .backends import Backend, BackendError, ToolInfo
 from .config import Settings
@@ -32,6 +33,7 @@ class Hub:
         self.backends: dict[str, Backend] = {n: Backend(c, start_timeout=c.start_timeout, secrets=secrets) for n, c in settings.backends.items()}
         self.policies = {n: Policy(c.allow, c.deny, c.confirm) for n, c in settings.backends.items()}
         self.store = ResultStore()
+        self.approvals = None   # set by the long-running service: risky calls then wait for the owner in the admin UI
         self.audit = Audit(settings.audit_log, self._scrub)
         self._cache: dict[str, tuple[float, list, str]] = {}
         self._reload_lock = asyncio.Lock()
@@ -153,7 +155,14 @@ class Hub:
             policy = self.policies[info.backend]
             key = hashlib.sha256(json.dumps([full, arguments], sort_keys=True, default=str).encode()).hexdigest()
             if policy.needs_confirm(info.name, info.destructive):
-                self._check_confirm(full, key, confirm)
+                if self.approvals is not None:
+                    try:
+                        await self.approvals.gate(full, key, arguments)   # the model gets no code; only the owner can approve
+                    except Refused as e:
+                        status = "awaiting_approval" if "waiting" in str(e) else "refused"
+                        raise GatewayError(str(e)) from None
+                else:
+                    self._check_confirm(full, key, confirm)
             elif confirm:
                 pass  # a spare token is harmless
 

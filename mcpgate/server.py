@@ -20,6 +20,10 @@ This gateway reaches many tool servers through four tools, so their tool lists a
 Names look like backend.tool. If a result says it was cut, read_result pages through the rest.
 If a tool needs approval, tell the user what it will do and only then repeat the call with the confirm code."""
 
+INSTRUCTIONS_OWNER_APPROVAL = INSTRUCTIONS.rsplit("If a tool needs approval", 1)[0] + (
+    "If a tool needs approval, the call waits for the owner to approve it in their admin page. "
+    "If it says it is still waiting, tell the user and retry the identical call shortly. Never change the arguments to get around a refusal.")
+
 
 def _args(schema: dict) -> str:
     props = (schema or {}).get("properties", {}) or {}
@@ -33,7 +37,7 @@ def build(settings: Settings, hub: Hub | None = None, oauth=None, **server_kwarg
         server_kwargs.update(auth_server_provider=oauth, auth=oauth.auth_settings)
 
     # The hub outlives any single client session, so whoever runs the server (see serve.py) stops it.
-    app = FastMCP("mcpgate", instructions=INSTRUCTIONS, **server_kwargs)
+    app = FastMCP("mcpgate", instructions=INSTRUCTIONS_OWNER_APPROVAL if hub.approvals is not None else INSTRUCTIONS, **server_kwargs)
 
     @app.tool(structured_output=False)
     async def search_tools(query: str = "", backend: str | None = None, limit: int = 8, refresh: bool = False) -> str:
@@ -70,7 +74,7 @@ def build(settings: Settings, hub: Hub | None = None, oauth=None, **server_kwarg
 
     @app.tool(structured_output=False)
     async def call_tool(name: str, arguments: dict[str, Any] | None = None, confirm: str | None = None) -> list[ContentBlock]:
-        """Run a tool by its full name (backend.tool). Pass confirm only when a previous call asked for approval."""
+        """Run a tool by its full name (backend.tool). Pass confirm only when a previous call gave you a confirm code."""
         try:
             return await hub.call(name, arguments, confirm)
         except GatewayError as e:

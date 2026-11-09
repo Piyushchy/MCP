@@ -46,3 +46,8 @@ pre.review { white-space: pre-wrap; word-break: break-all; background: color-mix
 .chip.gone code { text-decoration: line-through; opacity: .6; }
 button.tiny { padding: 0 .4rem; font-size: .8rem; border-radius: 999px; }
 .summary { max-width: none; }
+.badge { display: inline-block; margin: 0 0 1rem; padding: .1rem .6rem; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); text-decoration: none; font-size: .9rem; }
+.badge.alert { border-color: #c62828; color: #c62828; font-weight: 600; }
+@media (prefers-color-scheme: dark) { .badge.alert { border-color: #ff8a80; color: #ff8a80; } }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.pending { border-color: var(--accent); max-width: none; }
