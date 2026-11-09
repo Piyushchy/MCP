@@ -125,9 +125,33 @@ ROUTES: list[Spec] = [
 ]
 
 
-def make_app(port: int, extra: list[Spec] | None = None) -> Starlette:
+# State-changing routes that cannot require a session (there is none yet); each is protected by a credential instead.
+PRE_AUTH = {"/api/setup", "/api/login"}
+
+
+def _enforced(spec: Spec, auth):
+    """Wrap a handler so the session and CSRF rules declared in its Spec are applied here, not left to the handler."""
+    from .session import COOKIE
+
+    async def handler(request: Request) -> Response:
+        request.state.session = None
+        if spec.session:
+            sess = auth.get(request.cookies.get(COOKIE)) if auth else None
+            if sess is None:
+                return JSONResponse({"error": "login required"}, status_code=401)
+            if spec.csrf and not auth.csrf_ok(sess, request.headers.get("x-csrf-token", "")):
+                return JSONResponse({"error": "bad CSRF token"}, status_code=403)
+            request.state.session = sess
+        return await spec.handler(request)
+    return handler
+
+
+def make_app(port: int, extra: list[Spec] | None = None, auth=None) -> Starlette:
     specs = ROUTES + list(extra or [])
-    routes = [Route(s.path, s.handler, methods=list(s.methods)) for s in specs]
+    if auth is not None:
+        from .api import routes as api_routes
+        specs += api_routes(auth)
+    routes = [Route(s.path, _enforced(s, auth), methods=list(s.methods)) for s in specs]
 
     async def not_found(request, exc):
         return PlainTextResponse("not found", status_code=404)
@@ -150,10 +174,10 @@ def bind(port: int) -> socket.socket:
 
 
 class AdminServer:
-    def __init__(self, port: int, extra: list[Spec] | None = None):
+    def __init__(self, port: int, extra: list[Spec] | None = None, auth=None):
         self.port = port
         self.sock = bind(port)
-        self.server = uvicorn.Server(uvicorn.Config(make_app(port, extra), log_level="warning", lifespan="off"))
+        self.server = uvicorn.Server(uvicorn.Config(make_app(port, extra, auth), log_level="warning", lifespan="off"))
 
     async def serve(self) -> None:
         await self.server.serve(sockets=[self.sock])

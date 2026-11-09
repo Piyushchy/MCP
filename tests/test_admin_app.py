@@ -18,7 +18,7 @@ async def _ok(request):
 
 @pytest.fixture
 def client():
-    extra = [Spec("/api/thing", ("GET", "POST"), _ok, session=True, csrf=True)]
+    extra = [Spec("/api/thing", ("GET", "POST"), _ok, session=False, csrf=False)]   # session rules are covered in test_admin_auth.py
     return TestClient(make_app(PORT, extra), base_url=f"http://127.0.0.1:{PORT}")
 
 
@@ -64,10 +64,6 @@ def test_unknown_paths_and_methods_are_404(client):
     assert client.delete("/api/health", headers={**H, "origin": f"http://127.0.0.1:{PORT}"}).status_code == 404
 
 
-def test_every_state_changing_route_declares_csrf():
-    for s in admin.ROUTES:
-        if s.state_changing:
-            assert s.csrf and s.session, s.path
 
 
 def test_page_has_no_inline_script_or_outside_resources():

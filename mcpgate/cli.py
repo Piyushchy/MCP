@@ -216,10 +216,27 @@ def _auth_store():
 
 def _admin(srv, hub):
     from .admin.app import AdminError, AdminServer
+    from .admin.session import AdminAuth
+    auth = AdminAuth(_auth_store(), audit=lambda **f: hub.audit.log(**f))
     try:
-        return AdminServer(srv.admin_port)
+        server = AdminServer(srv.admin_port, auth=auth)
     except AdminError as e:
         raise ConfigError(str(e)) from None
+    if auth.state() == "setup":
+        print(f"First run: open http://127.0.0.1:{srv.admin_port} and enter this setup code (works once, 30 minutes):\n"
+              f"    {auth.issue_setup_code()}\nLost it? Run: mcpgate ui-code", file=sys.stderr)
+    else:
+        print(f"Admin UI: http://127.0.0.1:{srv.admin_port}", file=sys.stderr)
+    return server
+
+
+def cmd_ui_code(args) -> int:
+    from .admin.session import AdminAuth
+    auth = AdminAuth(_auth_store())
+    if auth.state() != "setup":
+        raise ConfigError("the admin passphrase is already set. To reset it, run: mcpgate auth clear-admin")
+    print(f"Setup code (works once, for 30 minutes; replaces any earlier code):\n    {auth.issue_setup_code()}")
+    return 0
 
 
 def cmd_serve(args) -> int:
@@ -344,7 +361,7 @@ def cmd_auth(args) -> int:
         cfgmod.save(s, args.config)
         print(f"New token (shown once, save it now):\n{t}")
         return 0
-    name = {"clear-passphrase": "oauth_passphrase", "clear-token": "static_token"}[args.action]
+    name = {"clear-passphrase": "oauth_passphrase", "clear-token": "static_token", "clear-admin": "admin_passphrase"}[args.action]
     print("Removed." if store.clear(name) else "It was not set.")
     return 0
 
@@ -482,8 +499,9 @@ def parser() -> argparse.ArgumentParser:
     sc.add_argument("name", nargs="?")
     sc.set_defaults(fn=cmd_secret)
     au = sub.add_parser("auth", help="set the approval passphrase / static token (stored only as hashes)")
-    au.add_argument("action", choices=["status", "passphrase", "token", "clear-passphrase", "clear-token"])
+    au.add_argument("action", choices=["status", "passphrase", "token", "clear-passphrase", "clear-token", "clear-admin"])
     au.set_defaults(fn=cmd_auth)
+    sub.add_parser("ui-code", help="print a one-time code to set the admin UI passphrase on first run").set_defaults(fn=cmd_ui_code)
     sub.add_parser("token", help="print a new random bearer token").set_defaults(fn=cmd_token)
     k = sub.add_parser("skill", help="show or install the 'mcp-gateway' skill that teaches a model to use the gateway efficiently")
     k.add_argument("action", choices=["show", "install"])

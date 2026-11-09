@@ -110,6 +110,8 @@ class AuthStore:
         rec = self.records.get(name)
         if not rec or not isinstance(value, str):
             return False
+        if rec.get("expires") and time.time() > rec["expires"]:
+            return False
         return verify_passphrase(value, rec) if rec.get("algo") == "scrypt" else verify_token(value, rec)
 
     # -- writing ---------------------------------------------------------
@@ -120,9 +122,9 @@ class AuthStore:
         self.records[name] = {**hash_passphrase(value), "updated": time.time()}
         self._save()
 
-    def set_token(self, name: str, value: str) -> None:
+    def set_token(self, name: str, value: str, ttl: float | None = None) -> None:
         self._sync()
-        self.records[name] = {**hash_token(value), "updated": time.time()}
+        self.records[name] = {**hash_token(value), "updated": time.time(), **({"expires": time.time() + ttl} if ttl else {})}
         self._save()
 
     def clear(self, name: str) -> bool:

@@ -2,3 +2,12 @@
 @media (prefers-color-scheme: dark) { :root { --bg:#0f1317; --fg:#e6e9ed; --muted:#9aa4af; --line:#2c333b; --accent:#6ea0ff; } }
 body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui, sans-serif; }
 main { max-width: 60rem; margin: 0 auto; padding: 1.5rem 1rem; }
+h1 { font-size: 1.4rem; }
+.card { border: 1px solid var(--line); border-radius: 8px; padding: 1rem 1.25rem; margin: 1rem 0; max-width: 28rem; }
+.field { margin: .75rem 0; }
+.field label { display: block; font-size: .9rem; color: var(--muted); margin-bottom: .25rem; }
+.field input { width: 100%; box-sizing: border-box; padding: .5rem; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
+button { font: inherit; padding: .5rem 1rem; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; }
+.muted { color: var(--muted); }
+.msg { color: #c62828; min-height: 1.5em; }
+@media (prefers-color-scheme: dark) { .msg { color: #ff8a80; } }
