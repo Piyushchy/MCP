@@ -23,28 +23,94 @@ for the tool it needs**, then call it.
 
 ## Install
 
-Needs Python 3.11+.
+Needs Linux with systemd and Python 3.11+ (the installer fetches one with uv if needed).
 
 ```bash
-pipx install git+https://github.com/Piyushchy/MCP     # or: pip install git+https://github.com/Piyushchy/MCP
-mcpgate init                                          # creates ~/.config/mcpgate/config.toml (mode 600)
+git clone https://github.com/Piyushchy/MCP.git
+cd MCP
+./install.sh
 ```
 
-## Quick start
+This installs the `mcpgate` command, starts a background service that survives logout and reboot, and prints the
+admin address and a one-time setup code. Details, options, upgrade and uninstall: [docs/install.md](docs/install.md).
+
+## Admin UI
+
+Everything below can be done in the browser; the terminal is optional after install. The admin page is served at
+**`http://127.0.0.1:8767`** and **only** on the loopback address of the computer running mcpgate. There is no
+setting, flag or environment variable that exposes it, and the public gateway port has no admin code at all
+(admin paths answer 404 there).
+
+![First run](docs/screenshots/setup-light.png)
+
+**First run.** Open the address, enter the setup code from the installer (`mcpgate ui-code` prints a new one),
+and choose an admin passphrase of at least 12 characters. A guided setup then asks you to pick a backend (GitHub
+or Google Colab presets, or your own), enter its secret, test it, and shows the line to connect your AI client.
+It opens once on a fresh install and can be reopened from **Settings**.
+
+![Guided setup](docs/screenshots/wizard-light.png)
+
+| Page | What you do there |
+|---|---|
+| **Backends** | See each backend and whether it is reachable, with a plain-language reason and hint if not. Test, enable, disable, remove. |
+| **Add backend** | Presets, a remote URL (HTTP or SSE), or a command. Fields for environment variables, headers and secrets. |
+| **Permissions** | Per backend: which tools are visible, hidden (`deny`), or need approval (`confirm`). Pick from the real tool list instead of typing patterns. |
+| **Approvals** | Pending requests for tools that need approval, showing the exact arguments. Approve once, for a while, or deny. |
+| **Remote access** | Public address, approval passphrase, access token, a connection check, setup instructions for Tailscale Funnel or Cloudflare, and the apps currently signed in (sign out one or all). |
+| **Activity** | The audit log with filters, paging and download. Log size and rotation are set here. |
+| **Settings** | Change the admin passphrase, sign out, reopen the guided setup, and the switch for custom command backends. |
+
+| Backends | Permissions |
+|---|---|
+| ![Backends](docs/screenshots/backends-light.png) | ![Permissions](docs/screenshots/permissions-light.png) |
+| **Approvals** | **Remote access** |
+| ![Approvals](docs/screenshots/approvals-light.png) | ![Remote access](docs/screenshots/remote-light.png) |
+
+All pages follow the system light or dark theme; dark versions are in [docs/screenshots](docs/screenshots).
+
+**Secrets.** Values you enter (tokens, API keys) are stored in `~/.config/mcpgate/secrets.json` (mode 600) and
+referenced as `${NAME}` in backend settings. They are write-only: the page can replace or delete one but can never
+show it again, and they are kept out of logs, the audit log and error messages. They are **plaintext on disk**
+(protected by file permissions, not encrypted), like most config files that hold tokens.
+
+**Changes apply live.** Saving in the UI, or editing `config.toml` by hand, is picked up within about two seconds
+(or at once on `SIGHUP`). A config with an error never replaces the working one; the page shows what is wrong.
+
+**Things that need you to type the passphrase again.** Anything that can run code on your computer (adding a
+command backend, changing a command) asks for your admin passphrase again, and enabling custom commands also needs
+the typed words `ALLOW PROGRAMS`. They are off by default. Presets work without that switch.
+
+**From another computer.** The admin page stays on loopback; forward it over SSH
+(`ssh -L 8767:127.0.0.1:8767 you@server`) and browse to `http://127.0.0.1:8767` on your laptop.
+
+**Lost the admin passphrase?** `mcpgate auth clear-admin`, then `mcpgate ui-code` for a new setup code.
+
+**Where things are stored**
+
+| What | Where |
+|---|---|
+| Settings | `~/.config/mcpgate/config.toml` |
+| Secrets | `~/.config/mcpgate/secrets.json` (600) |
+| Admin passphrase hash, approval passphrase, token | `~/.config/mcpgate/auth.json` (600, hashed) |
+| Custom backends | `~/.config/mcpgate/custom/` |
+| Signed-in apps (hashed tokens) | `~/.local/state/mcpgate/oauth.json` (600) |
+| Audit log | path from `audit_log` in `config.toml` |
+
+Security design, what is and is not protected: [SECURITY.md](SECURITY.md) and
+[docs/threat-model.md](docs/threat-model.md).
+
+## Quick start (command line)
+
+The UI does the same as these commands.
 
 ```bash
-# GitHub's own hosted MCP server: no local process, just your token in a header.
-# Make a fine-grained token limited to the repos you want, and put it in your environment first.
-export GITHUB_TOKEN=...
+export GITHUB_TOKEN=...      # or store it in the UI, or: mcpgate secret set GITHUB_TOKEN
 mcpgate add github --url https://api.githubcopilot.com/mcp/ \
     --header 'Authorization=Bearer ${GITHUB_TOKEN}' --deny 'delete_*'
-
-# a local server started as a command (everything after -- is the command)
 mcpgate add colab --start-timeout 120 -- uvx git+https://github.com/googlecolab/colab-mcp
 
-mcpgate doctor          # checks the config, commands, environment variables and live connections
-mcpgate tools           # lists what the model will be able to find
-mcpgate tools github    # one backend; use it to pick the exact tool names for --confirm / --deny
+mcpgate doctor          # config, commands, environment, file permissions and live connections
+mcpgate tools github    # the tools the model can find; use it to pick names for --confirm / --deny
 ```
 
 Then point your client at the gateway:
@@ -59,8 +125,8 @@ or, in a client that uses a JSON config:
 { "mcpServers": { "mcpgate": { "command": "mcpgate", "args": ["serve"] } } }
 ```
 
-Secrets stay in your environment. `mcpgate add` refuses a secret typed straight into the config;
-use `${NAME}` and set `NAME` where the gateway runs.
+`mcpgate add` refuses a secret typed straight into the config; use `${NAME}` and store `NAME` with
+`mcpgate secret set NAME` (reads it without echo), in the UI, or in the service's environment.
 
 ## What the model sees
 
@@ -97,6 +163,16 @@ max_result_chars = 20000   # longer text results are cut; read_result pages the 
 audit_log = "~/.local/state/mcpgate/audit.jsonl"   # empty = no log
 custom_dir = ""            # empty = ~/.config/mcpgate/custom
 
+[server]                   # remote access and admin settings (the UI edits these)
+public_url = ""            # https address of the tunnel; empty = no remote access
+port = 8766                # public gateway port (the tunnel points here)
+admin_port = 8767          # admin page, loopback only
+allow_hosts = []           # extra host names accepted on the public port
+oauth_enabled = false      # let apps such as claude.ai sign in with the approval passphrase
+static_token_enabled = false
+allow_custom_commands = false   # lets command backends be added from the UI
+# wizard_done is set by the guided setup
+
 [backends.notes_server]
 command = "npx"
 args = ["-y", "some-mcp-server-package"]
@@ -130,12 +206,17 @@ is ignored, which is how you switch one off. An entry in `config.toml` with the 
 
 ## Approvals
 
-For a tool in `confirm` (or marked destructive), the first `call_tool` returns a one-time code and an
-instruction to tell the user what will happen. The call only runs when repeated with `confirm="<code>"`.
-The code is tied to the exact tool and arguments, works once, and expires after 5 minutes.
+For a tool in `confirm` (or marked destructive) the call is held until you approve it.
 
-This is a speed bump that depends on the model relaying the request to you. It is **not** a hard guarantee
-(the model receives the code itself). For tools that must never run, use `deny`.
+- **Running as the background service** (`mcpgate serve --service`, what the installer sets up): the request
+  appears on the **Approvals** page with the exact arguments. You approve once, for a period, or deny. The model
+  never receives a code it could use itself, so this is a real gate, not an honour system.
+- **Started by an app over stdio** (`claude mcp add mcpgate -- mcpgate serve`): there is no admin page in that
+  process, so the older flow applies: the first `call_tool` returns a one-time code and the model must tell you
+  what will happen and repeat the call with `confirm="<code>"`. The code is tied to the tool and arguments,
+  works once and expires after 5 minutes. This is a speed bump that depends on the model relaying the request.
+
+For tools that must never run, use `deny`.
 
 ## Using it from claude.ai (HTTPS + OAuth)
 
@@ -143,13 +224,21 @@ claude.ai (web and phone) runs on Anthropic's servers, so it cannot start a prog
 public HTTPS address, and it logs in with OAuth. mcpgate includes a small single-owner OAuth server for this.
 (If you only use Claude Code or Claude Desktop on the same computer, skip this section: stdio needs no network.)
 
+**In the UI:** open **Remote access**, enter your public address, set an approval passphrase, tick "Let apps sign in
+with the approval passphrase", Save, then press **Check connection**. The page shows the exact `tailscale funnel`
+or Cloudflare steps for your address under "Show setup instructions".
+
+**From the terminal instead:**
+
 ```bash
-export MCPGATE_PASSPHRASE="$(mcpgate token)"     # you type this on the approval page. Save it somewhere safe.
 sudo tailscale funnel --bg 8766                  # gives you https://your-machine.your-tailnet.ts.net
+mcpgate auth passphrase                          # asks for the passphrase you will type on the approval page
 mcpgate serve --http --port 8766 \
     --public-url https://your-machine.your-tailnet.ts.net \
     --allow-host your-machine.your-tailnet.ts.net
 ```
+
+(`MCPGATE_PASSPHRASE` in the environment still works and wins over the stored one.)
 
 Then in claude.ai: **Customize > Connectors > Add custom connector**, enter
 `https://your-machine.your-tailnet.ts.net/mcp`, leave the OAuth client fields empty (if asked how Claude
@@ -172,7 +261,7 @@ Requests that wait over 100 seconds for a reply get a 524, so keep tool calls un
 
 How it protects you:
 
-- **Only you can approve.** Approval needs the passphrase (12+ characters, from the environment, never stored).
+- **Only you can approve.** Approval needs the passphrase (12+ characters, stored only as a scrypt hash, or from the environment).
   Five wrong guesses lock the page for 1 minute, then 2, 4... up to 15. A stranger who spams guesses can
   therefore delay your own approval for a few minutes, but cannot get in.
 - **Redirect allow-list.** Only `claude.ai` and `localhost` (Claude Code) may register as an app. Others are
@@ -180,7 +269,7 @@ How it protects you:
 - **Short tokens, hashed at rest.** Access tokens last 1 hour; refresh tokens 30 days and rotate on every use
   (a reused one is rejected). The state file (`~/.local/state/mcpgate/oauth.json`, mode 600) holds only hashes
   of tokens, so a leaked copy cannot call your gateway.
-- **Sign everyone out:** `mcpgate oauth revoke-all` (works on a running gateway). `mcpgate oauth status` shows what is signed in.
+- **Sign everyone out:** the **Remote access** page, or `mcpgate oauth revoke-all`. `mcpgate oauth status` shows what is signed in.
 - The approval page cannot be framed, is never cached, and escapes everything an app tells it.
 
 What this does **not** do: there is one owner and one passphrase. Everyone who passes the approval page, or
@@ -211,28 +300,22 @@ Anyone who learns the token can use every exposed tool, so rotate it if it leaks
 
 ### Keep it running after you log out
 
-```ini
-# ~/.config/systemd/user/mcpgate.service
-[Service]
-EnvironmentFile=%h/.config/mcpgate/env        # MCPGATE_PASSPHRASE=... and your backend secrets (chmod 600)
-ExecStart=%h/.local/bin/mcpgate serve --http --port 8766 --public-url https://your-machine.your-tailnet.ts.net --allow-host your-machine.your-tailnet.ts.net
-Restart=on-failure
-[Install]
-WantedBy=default.target
-```
-Then `systemctl --user enable --now mcpgate` and `loginctl enable-linger $USER`.
+`./install.sh` already does this. To manage it later: `mcpgate service install | status | uninstall`
+(`uninstall --purge` also deletes your data, after asking). Logs: `journalctl --user -u mcpgate`.
 
 ## Audit log
 
 With `audit_log` set, every call appends one JSON line (time, tool, status, duration, arguments). Argument values
-under keys like `token`, `secret`, `password`, `authorization` or `api_key` are replaced with `***`, long strings
-are shortened, and the file is created mode 600. Statuses: `ok`, `cached`, `tool_error`, `error`.
+under keys like `token`, `secret`, `password`, `authorization` or `api_key`, and any stored secret value, are
+replaced with `***`; long strings are shortened; the file is created mode 600. Statuses: `ok`, `cached`,
+`tool_error`, `error`. The file rotates at `audit_max_mb` (default 10) and keeps `audit_keep` old files
+(default 5). Browse, filter and download it on the **Activity** page.
 
 ## Command reference
 
 | Command | What it does |
 |---|---|
-| `mcpgate serve [--http --host --port --token-env --allow-host --public-url --passphrase-env --state-file --oauth-redirect-host]` | Run the gateway. `--public-url` turns on OAuth. |
+| `mcpgate serve [--http --service --host --port --token-env --allow-host --public-url --passphrase-env --state-file --oauth-redirect-host]` | Run the gateway. `--service` also runs the admin page and approvals inbox. `--public-url` turns on OAuth. |
 | `mcpgate oauth status` / `revoke-all` | See or sign out the apps connected through OAuth. |
 | `mcpgate init` | Create a commented starter config. |
 | `mcpgate add NAME [--url URL --sse --env --header --allow --deny --confirm --timeout --description] [-- CMD ARGS]` | Add a backend. |
@@ -240,24 +323,34 @@ are shortened, and the file is created mode 600. Statuses: `ok`, `cached`, `tool
 | `mcpgate list` | Show configured backends (including drop-ins). |
 | `mcpgate tools [NAME]` | Connect and list the tools the model can find. |
 | `mcpgate new NAME` | Create a custom server from a template. |
+| `mcpgate secret set NAME` / `list` / `remove NAME` | Manage stored secrets (values are never printed). |
+| `mcpgate auth status` / `passphrase` / `token` / `clear-passphrase` / `clear-token` / `clear-admin` | Manage the approval passphrase, token and admin passphrase. |
+| `mcpgate ui-code` | Print a one-time code to set the admin passphrase. |
+| `mcpgate service install` / `uninstall` / `status` | The background service. |
 | `mcpgate token` | Print a new random bearer token. |
 | `mcpgate skill show` / `install [--dir --force]` | The optimization skill. |
-| `mcpgate doctor [--no-connect --timeout]` | Check everything and say what is wrong. |
+| `mcpgate doctor [--no-connect --timeout]` | Check config, secrets, file permissions and connections; exit 1 if something is wrong. |
 
-## Limitations (v0.1)
+## Limitations
 
+- The admin UI is local only by design. Use an SSH tunnel to reach it from elsewhere.
+- Stored secrets are **plaintext on disk** (mode 600), not encrypted.
+- Approvals in the admin page only protect the background service. A gateway started by an app over stdio still
+  uses the code flow described above.
+- Results returned by a backend's tools are passed to the model unchanged. Stored secrets are scrubbed from
+  errors, logs and the audit log, but not from what a tool legitimately returns.
 - Only **tools** are proxied. Resources, prompts, sampling and notifications from backends are not forwarded.
 - Remote *backends* authenticate with static headers; the gateway cannot yet sign in to a backend that requires OAuth.
 - Remote access has one owner: one passphrase, one static token. No per-user accounts or per-client permissions.
-- OAuth is implemented but not yet verified against the real claude.ai (see the section above).
+- OAuth and the Funnel/Cloudflare setup are tested end to end against local servers, but **not against the real
+  claude.ai**, and the GitHub and Google Colab presets have not been run against the real services.
 - The tool list is cached (`tools_ttl`); use `search_tools(refresh=true)` after a backend changes its tools.
 - The result cache and paging store live in memory and are not shared between gateway processes.
-- Config is read at start; restart the gateway after changes.
 
 ## Roadmap
 
 - An optional `namestorage[mcp]` adapter so your personal drive (Piyushchy/namestorage) appears as a backend.
-- Proxy resources and prompts; OAuth for remote backends; reload on config change.
+- Proxy resources and prompts; OAuth for remote backends.
 
 ## Development
 
