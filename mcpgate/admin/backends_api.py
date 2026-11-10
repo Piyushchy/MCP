@@ -10,7 +10,7 @@ from starlette.responses import JSONResponse, Response
 
 from ..backends import Backend as Conn
 from ..config import NAME_RE
-from . import addbackend
+from . import addbackend, friendly
 from .api import body
 from .app import Spec
 from .context import AdminContext
@@ -35,6 +35,7 @@ def row(ctx: AdminContext, b) -> dict:
     return {
         "name": b.name, "transport": cfg.transport, "source": cfg.source or "config", "enabled": cfg.enabled, "state": state,
         "error": ctx.secrets.scrub(b.error) if b.error and cfg.enabled else "",
+        "error_hint": friendly.explain(ctx.secrets.scrub(b.error), cfg.command if cfg.transport == "stdio" else "")[1] if b.error and cfg.enabled else "",
         "tools_visible": visible, "tools_hidden": hidden, "description": cfg.description,
         "target": _target(cfg), "path": cfg.args[0] if cfg.source == "custom" and cfg.args else None,
         "readonly": cfg.source == "custom", "start_timeout": cfg.start_timeout,
@@ -91,9 +92,12 @@ def routes(ctx: AdminContext) -> list[Spec]:
             result = {"ok": True, "tools": len(tools), "visible": visible, "hidden": len(tools) - visible,
                       "names": [t.name for t in tools][:100]}
         except asyncio.TimeoutError:
-            result = {"ok": False, "error": f"did not answer within {conn.start_timeout + 5:.0f} seconds"}
+            result = {"ok": False, "error": f"did not answer within {conn.start_timeout + 5:.0f} seconds",
+                      "hint": "It may still be starting (the first start can download things). Try again, or allow more time when adding it."}
         except Exception as e:  # noqa: BLE001 - shown to the admin, scrubbed
-            result = {"ok": False, "error": ctx.secrets.scrub(str(e))}
+            plain, hint = friendly.explain(e, b.cfg.command if b.cfg.transport == "stdio" else "")
+            raw = ctx.secrets.scrub(str(e))
+            result = {"ok": False, "error": ctx.secrets.scrub(plain) or raw, "hint": hint, "detail": raw[:500] if plain else ""}
         finally:
             if temp:
                 await temp.stop()

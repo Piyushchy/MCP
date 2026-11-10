@@ -210,7 +210,7 @@ function backendCard(b, reload) {
     say("Testing…");
     const r = await act(`/api/backends/${b.name}/test`);
     if (!r.ok) return say(r.body.error || "Failed.", true);
-    say(r.body.ok ? `Works: ${r.body.tools} tools (${r.body.visible} visible to the model).` : `Failed: ${r.body.error}`, !r.body.ok);
+    say(r.body.ok ? `Works: ${r.body.tools} tools (${r.body.visible} visible to the model).` : `Failed: ${r.body.error}${r.body.hint ? " " + r.body.hint : ""}`, !r.body.ok);
     reload();
   }));
   if (b.enabled) buttons.push(btn("Restart", async () => { say("Restarting…"); const r = await act(`/api/backends/${b.name}/restart`); if (r.ok) { say(""); reload(); } else say(r.body.error || "Failed.", true); }));
@@ -244,7 +244,7 @@ function backendCard(b, reload) {
     b.description ? el("p", {}, b.description) : "",
     el("p", { class: "muted" }, meta), el("p", { class: "muted" }, tools + (secrets ? " · " + secrets : "")),
     b.path ? el("p", { class: "muted" }, "File: " + b.path + " (drop-in, managed as a file)") : "",
-    b.error ? el("p", { class: "msg" }, b.error) : "",
+    b.error ? el("p", { class: "msg" }, b.error, b.error_hint ? el("br") : "", b.error_hint ? el("span", { class: "muted" }, b.error_hint) : "") : "",
     el("div", { class: "row" }, ...buttons), note, panelBox);
 }
 
@@ -286,7 +286,7 @@ function rowsEditor(title, nameLabel) {
 
 function textField(label, name, extra = {}) { return field(label, name, "text", { autocomplete: "off", ...extra }); }
 
-async function addSection(reloadList, goSettings) {
+async function addSection(reloadList, goSettings, onAdded) {
   const box = el("section", { "aria-labelledby": "add" });
   const { body: info } = await api("/api/presets");
   let current = null;
@@ -323,8 +323,9 @@ async function addSection(reloadList, goSettings) {
         done.textContent = "Added. Testing the connection…";
         reloadList();
         const t = await act(`/api/backends/${res.body.backend.name}/test`);
-        done.textContent = t.body.ok ? `Works: ${t.body.tools} tools found${t.body.names.length ? ": " + t.body.names.slice(0, 12).join(", ") + (t.body.names.length > 12 ? ", …" : "") : ""}.` : `Added, but the connection failed: ${t.body.error || "unknown error"}`;
+        done.textContent = t.body.ok ? `Works: ${t.body.tools} tools found${t.body.names.length ? ": " + t.body.names.slice(0, 12).join(", ") + (t.body.names.length > 12 ? ", …" : "") : ""}.` : `Added, but the connection failed: ${t.body.error || "unknown error"}${t.body.hint ? " " + t.body.hint : ""}`;
         reloadList();
+        if (onAdded) onAdded(res.body.backend.name, t.body);
         back.remove(); add.remove();
       });
       show(el("div", { class: "card" }, el("h3", {}, "Review"), el("p", { class: "muted" }, "This is exactly what will be saved."), pre, el("div", { class: "row" }, add, back), msg, done));
@@ -382,12 +383,15 @@ async function addSection(reloadList, goSettings) {
   return box;
 }
 
-async function settingsSection(reloadAll) {
+async function settingsSection(reloadAll, openGuide) {
   const box = el("section", { "aria-labelledby": "set" });
   async function load() {
     const { body: s } = await api("/api/settings");
     const msg = el("p", { class: "msg", role: "alert" });
-    const kids = [el("h2", { id: "set" }, "Settings"), el("h3", {}, "Custom commands"),
+    const guide = el("button", { type: "button", class: "plain" }, "Open the setup guide");
+    guide.addEventListener("click", () => openGuide());
+    const kids = [el("h2", { id: "set" }, "Settings"), el("h3", {}, "Setup guide"),
+      el("p", { class: "muted" }, "Step by step: add a first backend, test it, and connect a client."), guide, el("h3", {}, "Custom commands"),
       el("p", {}, s.custom_commands ? "On: this page can add and enable programs that run on this computer." : "Off: this page can only add presets and remote servers.")];
     if (s.custom_commands) {
       const off = el("button", { type: "button", class: "plain" }, "Turn off");
@@ -757,6 +761,125 @@ async function auditSection() {
   return box;
 }
 
+// ---- first-run setup guide ----------------------------------------------------------------------
+let wizardOpen = false;
+let wizardAuto = true;     // open it by itself once per page load, on a fresh install only
+
+const WIZ_STEPS = ["Admin passphrase", "Add a backend", "Test it", "Connect a client", "Summary"];
+
+async function wizardSection(close) {
+  const { body: first } = await api("/api/wizard");
+  const box = el("section", { class: "card", "aria-labelledby": "wiz" });
+  let step = first.has_backend ? 3 : 2;
+  let target = "";        // the backend being tested in step 3
+  let lastTest = null;
+
+  async function skip() { await act("/api/wizard", { done: true }); await close(); }
+
+  function frame(...kids) {
+    const nav = el("ol", { class: "steps" }, ...WIZ_STEPS.map((t, i) => el("li", { class: i + 1 === step ? "current" : i + 1 < step ? "done" : "", "aria-current": i + 1 === step ? "step" : null }, `${i + 1}. ${t}`)));
+    const sk = el("button", { type: "button", class: "plain" }, "Skip setup for now");
+    sk.addEventListener("click", skip);
+    box.replaceChildren(el("h2", { id: "wiz" }, "Set up mcpgate"), nav, ...kids, el("div", { class: "row" }, sk,
+      el("span", { class: "muted" }, "You can come back to this from Settings.")));
+  }
+
+  function next(n) { step = n; draw(); }
+
+  async function draw() {
+    if (step === 2) return stepAdd();
+    if (step === 3) return stepTest();
+    if (step === 4) return stepConnect();
+    return stepSummary();
+  }
+
+  async function stepAdd() {
+    const skipStep = el("button", { type: "button", class: "plain" }, "I already have backends, continue");
+    skipStep.addEventListener("click", () => next(first.has_backend ? 3 : 4));
+    const add = await addSection(() => {}, () => close(), (name, t) => { target = name; lastTest = t; next(3); });
+    frame(el("p", {}, "Pick something to connect. Passwords and tokens go into a password field and are stored write-only."), add, skipStep);
+  }
+
+  async function stepTest() {
+    if (!target) {
+      const { body } = await api("/api/backends");
+      const usable = body.backends.filter((b) => b.enabled);
+      if (!usable.length) { frame(el("p", {}, "There is no enabled backend to test yet."), backTo(2)); return; }
+      target = usable[0].name;
+    }
+    const out = el("div", { "aria-live": "polite" });
+    const again = el("button", { type: "button" }, "Test again");
+    const cont = el("button", { type: "button", class: "plain" }, "Continue");
+    const undo = el("button", { type: "button", class: "plain" }, "Remove it and start over");
+    const paint = (t) => {
+      if (!t) { out.replaceChildren(el("p", {}, "Testing…")); return; }
+      if (t.ok) {
+        out.replaceChildren(el("p", { class: "note" }, `It works: ${t.tools} tool${t.tools === 1 ? "" : "s"} found${t.hidden ? `, ${t.hidden} hidden by permissions` : ""}.`),
+          t.names.length ? el("ul", { class: "toolnames" }, ...t.names.slice(0, 50).map((n) => el("li", {}, n))) : "");
+      } else {
+        out.replaceChildren(el("p", { class: "msg", role: "alert" }, "The connection did not work: " + (t.error || "unknown error")), t.hint ? el("p", {}, t.hint) : "",
+          t.detail ? el("details", {}, el("summary", {}, "Technical detail"), el("pre", { class: "code" }, t.detail)) : "");
+      }
+    };
+    const run = async () => {
+      again.disabled = true; paint(null);
+      const r = await act(`/api/backends/${encodeURIComponent(target)}/test`);
+      lastTest = r.ok ? r.body : { ok: false, error: r.body.error || "The test could not run." };
+      paint(lastTest); again.disabled = false;
+    };
+    again.addEventListener("click", run);
+    cont.addEventListener("click", () => next(4));
+    undo.addEventListener("click", async () => {
+      const r = await act(`/api/backends/${encodeURIComponent(target)}/remove`, { confirm: true, delete_secrets: true });
+      if (!r.ok) { out.replaceChildren(el("p", { class: "msg", role: "alert" }, r.body.error || "Could not remove it.")); return; }
+      target = ""; lastTest = null; next(2);
+    });
+    frame(el("p", {}, `Testing “${target}”.`), out, el("div", { class: "row" }, again, cont, undo));
+    if (lastTest) paint(lastTest); else await run();
+  }
+
+  function backTo(n) {
+    const b = el("button", { type: "button", class: "plain" }, "Back");
+    b.addEventListener("click", () => next(n));
+    return b;
+  }
+
+  async function stepConnect() {
+    const { body: w } = await api("/api/wizard");
+    const remote = el("button", { type: "button" }, "Set up remote access");
+    remote.addEventListener("click", async () => { await act("/api/wizard", { done: true }); await close("rem"); });
+    const go = el("button", { type: "button" }, "Continue");
+    go.addEventListener("click", () => next(5));
+    frame(el("p", {}, "How will your AI apps reach mcpgate?"),
+      el("div", { class: "card" }, el("h3", {}, "This computer only"),
+        el("p", { class: "muted" }, "For Claude Code and other apps on this computer. Run this once in a terminal:"), codeBlock(w.connect.command),
+        el("p", { class: "muted" }, "Or paste this into the app's MCP settings:"), codeBlock(w.connect.json)),
+      el("div", { class: "card" }, el("h3", {}, "From claude.ai"), el("p", { class: "muted" }, "Needs a public address and a sign-in passphrase. The next page walks you through it."), remote),
+      el("div", { class: "row" }, backTo(3), go));
+  }
+
+  async function stepSummary() {
+    const { body: w } = await api("/api/wizard");
+    const s = w.summary;
+    const done = el("button", { type: "button" }, "Finish");
+    done.addEventListener("click", async () => { await act("/api/wizard", { done: true }); await close(); });
+    const li = (...t) => el("li", {}, ...t);
+    frame(el("h3", {}, "Protected"), el("ul", {},
+      li(`The admin page listens on ${s.admin.address} only, so only this computer can reach it.`),
+      li("Admin passphrase: set."),
+      ...s.backends.map((b) => li(`${b.name} (${b.transport}${b.enabled ? "" : ", disabled"}): ` +
+        (b.secrets.length ? b.secrets.map((x) => `${x.name} ${x.set ? "set" : "NOT set"}`).join(", ") + "; " : "") +
+        `${b.needs_approval} rule${b.needs_approval === 1 ? "" : "s"} needing your approval, ${b.blocked} blocked.`)),
+      li(s.approvals ? "Risky calls wait for you in the Approvals inbox." : "Approvals inbox is active when you run the background service."),
+      li(s.audit ? "Every call and admin action is logged." : "The activity log is off.")),
+      el("h3", {}, "Exposed"), el("ul", {}, li(s.remote.exposed ? `Reachable from outside${s.remote.public_url ? " at " + s.remote.public_url : ""}${s.remote.signs_in ? ", with sign-in" : ""}${s.remote.token ? ", and by access token" : ""}.` : "Nothing is exposed outside this computer.")),
+      el("div", { class: "row" }, backTo(4), done));
+  }
+
+  await draw();
+  return box;
+}
+
 async function after(r) {
   if (!r.ok) return r.body.error || "Something went wrong.";
   await render();
@@ -776,11 +899,19 @@ async function render() {
   } else {
     const out = el("button", { type: "button" }, "Sign out");
     out.addEventListener("click", async () => { await api("/api/logout", "POST", {}); csrf = ""; document.title = "mcpgate admin"; await render(); });
+    const { body: wz } = await api("/api/wizard");
+    if (wizardAuto && !wz.done && !wz.has_backend) wizardOpen = true;
+    wizardAuto = false;
+    if (wizardOpen) {
+      const closeWizard = async (scrollTo) => { wizardOpen = false; await render(); if (scrollTo) { const t = root.querySelector(`section[aria-labelledby=${scrollTo}]`); if (t) t.scrollIntoView(); } };
+      page(el("p", {}, "You are signed in."), out, await wizardSection(closeWizard));
+      return;
+    }
     const approvals = await approvalsSection();
     const bk = await backendsSection();
     const remote = await remoteSection();
     const audit = await auditSection();
-    const settings = await settingsSection(() => render());
+    const settings = await settingsSection(() => render(), () => { wizardOpen = true; render(); });
     const add = await addSection(() => bk.reload(), () => settings.scrollIntoView());
     page(el("p", {}, "You are signed in."), out, approvals, bk, add, remote, audit, settings,
       form("Change passphrase", "", [field("Current passphrase", "current"), field("New passphrase (12+ characters)", "new", "password", { minlength: "12" })], "Change",

@@ -175,6 +175,7 @@ class Server:
     oauth_redirect_hosts: list[str] = field(default_factory=list)
     static_token_enabled: bool = False
     allow_custom_commands: bool = False   # the admin UI may create or enable programs that run on this computer
+    wizard_done: bool = False             # the first-run setup guide was finished or skipped
 
 
 @dataclass
@@ -192,7 +193,7 @@ class Settings:
 
 _GATEWAY_KEYS = {"cache_ttl", "tools_ttl", "max_result_chars", "audit_log", "audit_max_mb", "audit_keep", "custom_dir"}
 _SERVER_KEYS = {"public_url", "port", "admin_port", "allow_hosts", "oauth_enabled", "oauth_redirect_hosts", "static_token_enabled",
-                "allow_custom_commands"}
+                "allow_custom_commands", "wizard_done"}
 _BACKEND_KEYS = {"transport", "command", "args", "env", "cwd", "url", "headers", "allow", "deny",
                  "confirm", "enabled", "timeout", "start_timeout", "description", "preset"}
 
@@ -261,7 +262,7 @@ def parse(data: dict) -> Settings:
             if not all(HOST_RE.match(v) for v in vals):
                 raise ConfigError(f"[server] {key} entries must be bare host names (no scheme, port or path)")
             setattr(s.server, key, vals)
-    for key in ("oauth_enabled", "static_token_enabled", "allow_custom_commands"):
+    for key in ("oauth_enabled", "static_token_enabled", "allow_custom_commands", "wizard_done"):
         if key in sv:
             if not isinstance(sv[key], bool):
                 raise ConfigError(f"[server] {key} must be true or false")
