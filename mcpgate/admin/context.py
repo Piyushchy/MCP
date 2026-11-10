@@ -11,10 +11,25 @@ from .session import AuthError
 
 
 class AdminContext:
-    def __init__(self, hub, config_file: Path | str | None, reloader, secrets, auth):
+    def __init__(self, hub, config_file: Path | str | None, reloader, secrets, auth, *, running: dict | None = None,
+                 env_token: bool = False, env_pass: bool = False, oauth_state: Path | str | None = None, restarter=None):
         self.hub, self.reloader, self.secrets, self.auth = hub, reloader, secrets, auth
+        self.running, self.env_token, self.env_pass, self.restarter = running, env_token, env_pass, restarter
+        self.oauth_state = Path(oauth_state).expanduser() if oauth_state else None
+        self._oauth_store = None
+        self.check_transport = None      # tests replace these two; production uses the real network
+        self.resolve = None
+        self.check_lock = asyncio.Lock()
+        self.last_check = 0.0
         self.config_file = Path(config_file).expanduser() if config_file else cfgmod.config_path()
         self.lock = asyncio.Lock()   # one config edit at a time
+
+    def oauth_store(self):
+        """The same OAuth state file the gateway uses; each side notices the other's changes."""
+        if self._oauth_store is None:
+            from ..oauth import Store, default_state_path
+            self._oauth_store = Store(self.oauth_state or default_state_path())
+        return self._oauth_store
 
     def audit(self, **fields) -> None:
         self.hub.audit.log(**fields)

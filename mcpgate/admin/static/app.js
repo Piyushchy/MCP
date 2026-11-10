@@ -480,6 +480,175 @@ async function approvalsSection() {
   return box;
 }
 
+// ---- remote access ------------------------------------------------------------------------------
+function copyButton(text, label = "Copy") {
+  const b = el("button", { type: "button", class: "plain" }, label);
+  b.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(text); b.textContent = "Copied"; } catch (e) { b.textContent = "Select and copy by hand"; }
+    setTimeout(() => { b.textContent = label; }, 2000);
+  });
+  return b;
+}
+
+function codeBlock(text) {
+  return el("div", { class: "codewrap" }, el("pre", { class: "code" }, text), copyButton(text));
+}
+
+function ago(ts) {
+  if (!ts) return "never";
+  const m = Math.max(0, Math.round((Date.now() / 1000 - ts) / 60));
+  if (m < 1) return "just now";
+  if (m < 90) return m + " min ago";
+  if (m < 60 * 36) return Math.round(m / 60) + " h ago";
+  return Math.round(m / 1440) + " days ago";
+}
+
+async function remoteSection() {
+  const box = el("section", { "aria-labelledby": "rem" });
+  let token = "";          // shown once, then dropped
+  let checkResult = null;
+  const notes = {};
+  async function load() {
+    const { body: st } = await api("/api/remote");
+    const refresh = async () => { await load(); };
+    const say = (key, text, bad) => { notes[key] = { text, bad }; };
+    const note = (key) => { const n = notes[key]; return el("p", { class: n && n.bad ? "msg" : "note", role: n && n.bad ? "alert" : "status" }, n ? n.text : ""); };
+    const kids = [el("h2", { id: "rem" }, "Remote access"),
+      el("p", { class: "muted" }, "Lets claude.ai and other apps outside this computer reach your gateway through a tunnel. This admin page itself is never exposed.")];
+
+    if (st.restart.required) {
+      const b = el("button", { type: "button" }, "Restart now");
+      b.addEventListener("click", async () => {
+        const r = await act("/api/remote/restart");
+        say("restart", r.ok ? "Restarting. This page reconnects in a few seconds; reload it if it does not." : (r.body.error || "Could not restart."), !r.ok);
+        await refresh();
+      });
+      kids.push(el("div", { class: "banner", role: "status" }, el("p", {}, "Saved changes will apply after the service restarts." +
+        (st.restart.supervised ? "" : " It is not running under a service manager, so stop it with Ctrl+C and start it again yourself.")),
+        st.restart.supervised ? b : "", note("restart")));
+    }
+
+    // address and options
+    const url = el("input", { id: "r-url", name: "public_url", type: "text", autocomplete: "off", spellcheck: "false", placeholder: "https://your-machine.your-tailnet.ts.net", value: st.settings.public_url });
+    const port = el("input", { id: "r-port", name: "port", type: "number", min: "1024", max: "65535", value: String(st.settings.port) });
+    const hosts = el("input", { id: "r-hosts", name: "allow_hosts", type: "text", autocomplete: "off", value: st.settings.allow_hosts.join(", ") });
+    const oauth = el("input", { id: "r-oauth", name: "oauth_enabled", type: "checkbox" });
+    oauth.checked = st.settings.oauth_enabled;
+    const sf = el("form", { class: "card" }, el("h3", {}, "Address"),
+      el("div", { class: "field" }, el("label", { for: "r-url" }, "Public address (https, no path)"), url),
+      el("div", { class: "field" }, el("label", { for: "r-port" }, "Local port the tunnel points at"), port),
+      el("div", { class: "field" }, el("label", { for: "r-hosts" }, "Extra allowed host names (optional, comma separated)"), hosts),
+      el("div", { class: "field check" }, oauth, el("label", { for: "r-oauth" }, "Let apps sign in with the approval passphrase (claude.ai)")),
+      el("button", { type: "submit" }, "Save"), note("settings"));
+    sf.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const r = await api("/api/remote/settings", "POST", {
+        public_url: url.value.trim(), port: Number(port.value),
+        allow_hosts: hosts.value.split(",").map((x) => x.trim()).filter(Boolean), oauth_enabled: oauth.checked });
+      say("settings", r.ok ? "Saved." : (r.body.error || "Could not save."), !r.ok);
+      await refresh();
+    });
+    kids.push(sf);
+
+    // approval passphrase
+    const pw = el("input", { id: "r-pw", name: "passphrase", type: "password", autocomplete: "new-password", minlength: "12", required: "" });
+    const keep = el("input", { id: "r-keep", name: "keep", type: "checkbox" });
+    keep.checked = true;
+    const pf = el("form", { class: "card" }, el("h3", {}, "Approval passphrase"),
+      el("p", { class: "muted" }, st.passphrase.from_env ? "A passphrase is also set in the environment and takes priority." :
+        (st.passphrase.set ? "A passphrase is set. It is never shown again; set a new one to change it." : "Not set yet. Apps cannot sign in until you set one.")),
+      el("div", { class: "field" }, el("label", { for: "r-pw" }, "New passphrase (12+ characters)"), pw),
+      el("div", { class: "field check" }, keep, el("label", { for: "r-keep" }, "Keep apps that are already signed in")),
+      el("button", { type: "submit" }, st.passphrase.set ? "Change passphrase" : "Set passphrase"), note("pass"));
+    pf.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const r = await act("/api/remote/passphrase", { passphrase: pw.value, keep_sessions: keep.checked });
+      pw.value = "";
+      say("pass", r.ok ? "Passphrase saved." : (r.body.error || "Could not save."), !r.ok);
+      await refresh();
+    });
+    kids.push(pf);
+
+    // access token
+    const tk = [el("h3", {}, "Access token"),
+      el("p", { class: "muted" }, st.token.from_env ? "A token is also set in the environment." :
+        (st.token.set ? "A token is set. It cannot be shown again; create a new one to replace it." : "For tools that cannot do the sign-in flow. Optional."))];
+    if (token) {
+      tk.push(el("p", { class: "note", role: "status" }, "Copy this token now. It will not be shown again."), codeBlock(token));
+    }
+    const make = el("button", { type: "button" }, st.token.set ? "Create a new token" : "Create token");
+    make.addEventListener("click", async () => {
+      const r = await act("/api/remote/token");
+      if (r.ok) { token = r.body.token; } else say("token", r.body.error || "Could not create a token.", true);
+      await refresh();
+    });
+    tk.push(make);
+    if (st.token.set) {
+      const rm = el("button", { type: "button", class: "plain" }, "Remove token");
+      rm.addEventListener("click", async () => { token = ""; await act("/api/remote/token/remove"); await refresh(); });
+      tk.push(rm);
+    }
+    tk.push(note("token"));
+    kids.push(el("div", { class: "card" }, ...tk));
+
+    // connection check
+    const chk = el("button", { type: "button" }, "Check connection");
+    chk.disabled = !st.settings.public_url;
+    chk.addEventListener("click", async () => {
+      chk.disabled = true;
+      const r = await api("/api/remote/check", "POST", {});
+      checkResult = r.ok ? r.body : null;
+      say("check", r.ok ? "" : (r.body.error || "The check failed."), !r.ok);
+      await refresh();
+    });
+    const list = el("ul", { class: "checks" });
+    if (checkResult) {
+      for (const c of checkResult.results) {
+        list.append(el("li", { class: c.ok === true ? "pass" : c.ok === false ? "fail" : "warn" },
+          el("strong", {}, (c.ok === true ? "OK: " : c.ok === false ? "Problem: " : "Note: ") + c.name), " " + c.detail, c.advice ? el("div", { class: "muted" }, c.advice) : ""));
+      }
+    }
+    kids.push(el("div", { class: "card" }, el("h3", {}, "Connection check"),
+      el("p", { class: "muted" }, "Contacts your saved public address from here and reports what an outside app would see."), chk, note("check"), list));
+
+    // instructions
+    const ins = st.instructions;
+    const how = [el("h3", {}, "How to connect"), el("p", {}, "Connector address for claude.ai:"), codeBlock(ins.connector_url)];
+    for (const key of ["tailscale", "cloudflare"]) {
+      const g = ins[key];
+      how.push(el("h4", {}, g.title), el("p", { class: "muted" }, g.intro));
+      for (const c of g.commands) how.push(codeBlock(c));
+    }
+    how.push(el("h4", {}, "In claude.ai"), el("ol", {}, ...ins.claude.map((t) => el("li", {}, t))));
+    kids.push(el("details", { class: "card" }, el("summary", {}, "Show setup instructions"), ...how));
+
+    // signed-in apps
+    const apps = [el("h3", {}, "Signed-in apps")];
+    if (!st.clients.length) apps.push(el("p", { class: "muted" }, "No apps are signed in."));
+    for (const c of st.clients) {
+      const mine = st.sessions.filter((x) => x.client_id === c.client_id);
+      const rm = el("button", { type: "button", class: "plain" }, "Remove app");
+      rm.addEventListener("click", async () => { await act("/api/remote/clients/" + encodeURIComponent(c.client_id) + "/remove"); await refresh(); });
+      const row = el("div", { class: "approval" }, el("strong", {}, c.name), el("span", { class: "muted" }, ` ${mine.length} signed in, last used ${ago(c.last_used)} `), rm);
+      for (const x of mine) {
+        const so = el("button", { type: "button", class: "plain" }, "Sign out");
+        so.addEventListener("click", async () => { await act("/api/remote/sessions/" + encodeURIComponent(x.id) + "/signout"); await refresh(); });
+        row.append(el("div", {}, `Session started ${ago(x.created)}, last used ${ago(x.last_used)} `, so));
+      }
+      apps.push(row);
+    }
+    if (st.clients.length) {
+      const all = el("button", { type: "button" }, "Sign out everywhere");
+      all.addEventListener("click", async () => { await act("/api/remote/signout-all"); await refresh(); });
+      apps.push(all);
+    }
+    kids.push(el("div", { class: "card" }, ...apps));
+    box.replaceChildren(...kids);
+  }
+  await load();
+  return box;
+}
+
 async function after(r) {
   if (!r.ok) return r.body.error || "Something went wrong.";
   await render();
@@ -501,9 +670,10 @@ async function render() {
     out.addEventListener("click", async () => { await api("/api/logout", "POST", {}); csrf = ""; document.title = "mcpgate admin"; await render(); });
     const approvals = await approvalsSection();
     const bk = await backendsSection();
+    const remote = await remoteSection();
     const settings = await settingsSection(() => render());
     const add = await addSection(() => bk.reload(), () => settings.scrollIntoView());
-    page(el("p", {}, "You are signed in."), out, approvals, bk, add, settings,
+    page(el("p", {}, "You are signed in."), out, approvals, bk, add, remote, settings,
       form("Change passphrase", "", [field("Current passphrase", "current"), field("New passphrase (12+ characters)", "new", "password", { minlength: "12" })], "Change",
         async (v) => after(await api("/api/passphrase", "POST", { current: v.current, new: v.new }))));
     root.querySelector("h1").after(approvals.badge, approvals.live);

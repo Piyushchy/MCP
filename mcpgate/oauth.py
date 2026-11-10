@@ -95,6 +95,47 @@ class Store:
         self.data = {"clients": {}, "access": {}, "refresh": {}}
         self.save()
 
+    # -- what the admin UI shows and does --------------------------------------------
+    def sessions(self) -> list[dict]:
+        """One row per signed-in session (it keeps its id while its tokens rotate). No token material."""
+        self._sync()
+        now, rows = time.time(), {}
+        for rec in self.data["refresh"].values():
+            if rec["exp"] <= now:
+                continue
+            sid = rec.get("session") or rec["grant"]
+            used = max([rec.get("used", 0)] + [a.get("used", 0) for a in self.data["access"].values() if a["grant"] == rec["grant"]])
+            client = self.data["clients"].get(rec["client_id"], {})
+            rows[sid] = {"id": sid, "client_id": rec["client_id"], "client_name": client.get("client_name") or "An app",
+                         "created": rec.get("created", 0), "last_used": used or rec.get("created", 0), "expires": rec["exp"]}
+        return sorted(rows.values(), key=lambda r: -r["last_used"])
+
+    def clients(self) -> list[dict]:
+        self._sync()
+        return [{"client_id": cid, "name": c.get("client_name") or "An app", "created": c.get("client_id_issued_at") or 0}
+                for cid, c in self.data["clients"].items()]
+
+    def signout(self, session_id: str) -> bool:
+        """End one session now: its refresh and access tokens stop working on the running gateway."""
+        self._sync()
+        grants = {r["grant"] for r in self.data["refresh"].values() if (r.get("session") or r["grant"]) == session_id}
+        if not grants:
+            return False
+        for kind in ("access", "refresh"):
+            self.data[kind] = {h: v for h, v in self.data[kind].items() if v["grant"] not in grants}
+        self.save()
+        return True
+
+    def remove_client(self, client_id: str) -> bool:
+        self._sync()
+        if client_id not in self.data["clients"]:
+            return False
+        del self.data["clients"][client_id]
+        for kind in ("access", "refresh"):
+            self.data[kind] = {h: v for h, v in self.data[kind].items() if v["client_id"] != client_id}
+        self.save()
+        return True
+
 
 class GatewayOAuth:
     """Implements the SDK's authorization-server provider for one owner."""
@@ -259,12 +300,13 @@ button.deny{{background:transparent;color:var(--ink);border-color:var(--line)}}
             raise TokenError("invalid_grant", "authorization code already used")
         return self._issue(client.client_id, authorization_code.scopes, authorization_code.resource)
 
-    def _issue(self, client_id: str, scopes: list[str], resource: str | None) -> OAuthToken:
+    def _issue(self, client_id: str, scopes: list[str], resource: str | None, session: str | None = None, created: float | None = None) -> OAuthToken:
         self.store._sync()
         now = self._now()
         access, refresh = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
         grant = secrets.token_hex(8)
-        common = {"client_id": client_id, "scopes": scopes or [SCOPE], "resource": resource, "grant": grant}
+        common = {"client_id": client_id, "scopes": scopes or [SCOPE], "resource": resource, "grant": grant,
+                  "session": session or secrets.token_hex(8), "created": int(created or now), "used": int(now)}
         self.store.data["access"][_h(access)] = {**common, "exp": int(now + ACCESS_TTL)}
         self.store.data["refresh"][_h(refresh)] = {**common, "exp": int(now + REFRESH_TTL)}
         self.store.save()
@@ -286,7 +328,7 @@ button.deny{{background:transparent;color:var(--ink);border-color:var(--line)}}
             raise TokenError("invalid_grant", "refresh token already used or revoked")
         for h in [h for h, v in self.store.data["access"].items() if v["grant"] == old["grant"]]:
             del self.store.data["access"][h]
-        return self._issue(client.client_id, scopes or old["scopes"], old.get("resource"))
+        return self._issue(client.client_id, scopes or old["scopes"], old.get("resource"), old.get("session") or old["grant"], old.get("created"))
 
     async def load_access_token(self, token: str):
         if self._static_ok(token):
@@ -294,6 +336,10 @@ button.deny{{background:transparent;color:var(--ink);border-color:var(--line)}}
         self.store._sync()
         rec = self.store.data["access"].get(_h(token))
         if rec and rec["exp"] > self._now():
+            now = self._now()
+            if now - rec.get("used", 0) >= 60:     # "last used", written at most once a minute per token
+                rec["used"] = int(now)
+                self.store.save()
             return AccessToken(token=token, client_id=rec["client_id"], scopes=rec["scopes"], expires_at=rec["exp"],
                                resource=rec.get("resource"), subject="owner")
         return None

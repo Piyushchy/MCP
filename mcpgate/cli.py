@@ -214,12 +214,13 @@ def _auth_store():
     return AuthStore()
 
 
-def _admin(srv, hub, reloader, args):
+def _admin(srv, hub, reloader, args, running=None, restarter=None, env_token=False, env_pass=False):
     from .admin.app import AdminError, AdminServer
     from .admin.context import AdminContext
     from .admin.session import AdminAuth
     auth = AdminAuth(_auth_store(), audit=lambda **f: hub.audit.log(**f))
-    ctx = AdminContext(hub, args.config, reloader, hub.secrets, auth)
+    ctx = AdminContext(hub, args.config, reloader, hub.secrets, auth, running=running, restarter=restarter, env_token=env_token,
+                       env_pass=env_pass, oauth_state=args.state_file)
     try:
         server = AdminServer(srv.admin_port, auth=auth, ctx=ctx)
     except AdminError as e:
@@ -295,6 +296,12 @@ def cmd_serve(args) -> int:
         from .approvals import Approvals
         hub.approvals = Approvals(audit=lambda **f: hub.audit.log(**f), scrub=hub._scrub)
     app, hub = build(s, hub=hub, oauth=oauth, **kwargs)
+    from .remote import Restarter
+    restarter = Restarter()
+    running = {"listener": bool(args.http), "oauth": oauth is not None, "static": bool(token or verify),
+               "public_url": oauth.public_url if oauth else "", "port": (port if args.http else srv.port),
+               "hosts": sorted(srv.allow_hosts)}
+    envs = {"env_token": bool(os.environ.get(args.token_env)), "env_pass": bool(os.environ.get(args.passphrase_env))}
     if args.http:
         how = ("OAuth (passphrase approval)" + (" and static token" if (token or verify) else "")) if oauth else (
             "token required" if (token or verify) else "no token, loopback only")
@@ -305,7 +312,7 @@ def cmd_serve(args) -> int:
             if args.service:
                 public = serve.make_http_server(app, host, port, token, oauth is not None, verify)
                 rl = _reloader(hub, args)
-                serve.run_service(hub, public, _admin(srv, hub, rl, args), reloader=rl)
+                serve.run_service(hub, public, _admin(srv, hub, rl, args, running, restarter, **envs), reloader=rl, restarter=restarter)
             else:
                 serve.run_http(app, hub, host, port, token, oauth=oauth is not None, reloader=_reloader(hub, args), verify=verify)
         except ValueError as e:
@@ -313,7 +320,7 @@ def cmd_serve(args) -> int:
     elif args.service:
         print(f"mcpgate service: admin UI on http://127.0.0.1:{srv.admin_port} (no remote access configured yet)", file=sys.stderr)
         rl = _reloader(hub, args)
-        serve.run_service(hub, None, _admin(srv, hub, rl, args), reloader=rl)
+        serve.run_service(hub, None, _admin(srv, hub, rl, args, running, restarter, **envs), reloader=rl, restarter=restarter)
     else:
         serve.run_stdio(app, hub, reloader=_reloader(hub, args))
     return 0

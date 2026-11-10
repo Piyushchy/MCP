@@ -98,9 +98,16 @@ def run_http(app: FastMCP, hub: Hub, host: str, port: int, token: str | None, oa
     asyncio.run(main())
 
 
-def run_service(hub: Hub, public: uvicorn.Server | None, admin, reloader=None) -> None:
+def run_service(hub: Hub, public: uvicorn.Server | None, admin, reloader=None, restarter=None) -> None:
     """The long-running service: the local admin UI always, the public gateway listener only when remote access is set up.
     If either listener stops, the other one is stopped too, so a half-running service is never left behind."""
+    if restarter:
+        def stop_all():
+            if public:
+                public.should_exit = True
+            admin.stop()
+        restarter.attach(stop_all)
+
     async def main():
         if reloader:
             reloader.start()
@@ -119,3 +126,5 @@ def run_service(hub: Hub, public: uvicorn.Server | None, admin, reloader=None) -
                 await reloader.stop()
             await hub.stop()
     asyncio.run(main())
+    if restarter and restarter.requested:
+        raise SystemExit(restarter.EXIT_CODE)   # the service manager starts us again with the saved settings

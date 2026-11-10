@@ -57,7 +57,7 @@ class Rig:
 
 
 @asynccontextmanager
-async def rig(tmp_path, backends=None, secrets=None, custom=False):
+async def rig(tmp_path, backends=None, secrets=None, custom=False, **ctx_kwargs):
     path = tmp_path / "config.toml"
     settings = Settings(audit_log=str(tmp_path / "audit.jsonl"), backends=backends if backends is not None else {"demo": demo()})
     settings.server.allow_custom_commands = custom
@@ -68,7 +68,7 @@ async def rig(tmp_path, backends=None, secrets=None, custom=False):
     hub = Hub(loader.load_settings(path), secrets=store)
     reloader = Reloader(hub, path)
     auth = AdminAuth(AuthStore(tmp_path / "auth.json"), audit=lambda **f: hub.audit.log(**f))
-    ctx = AdminContext(hub, path, reloader, store, auth)
+    ctx = AdminContext(hub, path, reloader, store, auth, **{"oauth_state": tmp_path / "oauth.json", **ctx_kwargs})
     app = admin.make_app(PORT, auth=auth, ctx=ctx)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=f"http://{HOST}") as c:
         h = {"host": HOST, "origin": f"http://{HOST}", "content-type": "application/json"}
