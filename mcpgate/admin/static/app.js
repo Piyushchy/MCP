@@ -649,6 +649,114 @@ async function remoteSection() {
   return box;
 }
 
+// ---- audit log ----------------------------------------------------------------------------------
+const WHEN = { "": "All time", "3600": "Last hour", "86400": "Last 24 hours", "604800": "Last 7 days" };
+const KIND = { "": "Everything", call: "Tool calls", admin: "Admin actions", approval: "Approvals" };
+
+function select(id, label, options, value = "") {
+  const sel = el("select", { id, name: id });
+  for (const [v, t] of options) { const o = el("option", { value: v }, t); if (v === value) o.selected = true; sel.append(o); }
+  return el("div", { class: "field" }, el("label", { for: id }, label), sel);
+}
+
+function bytesText(n) { return n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KB" : (n / 1048576).toFixed(1) + " MB"; }
+
+function auditRow(e) {
+  const what = e.event ? e.event.replace(/_/g, " ") : (e.tool || "?");
+  const status = e.event ? "" : (e.status || "");
+  const sum = el("summary", {}, el("time", { datetime: new Date(e.ts * 1000).toISOString() }, new Date(e.ts * 1000).toLocaleString()), " ",
+    el("strong", {}, what), status ? el("span", { class: "tag " + (status === "ok" || status === "cached" ? "good" : "bad") }, " " + status) : "",
+    typeof e.ms === "number" ? el("span", { class: "muted" }, " " + e.ms + " ms") : "");
+  return el("details", { class: "logrow" }, sum, el("pre", { class: "code" }, JSON.stringify(e, null, 2)));
+}
+
+async function auditSection() {
+  const box = el("section", { "aria-labelledby": "aud" });
+  const f = { backend: "", tool: "", status: "", kind: "", q: "", when: "" };
+  let entries = [], next = null, meta = null, loading = false, note = "";
+  const list = el("div", { class: "loglist", "aria-live": "polite" });
+  const more = el("button", { type: "button", class: "plain" }, "Show older");
+  const info = el("p", { class: "muted" });
+
+  function query(cursor) {
+    const q = new URLSearchParams({ limit: "100" });
+    for (const k of ["backend", "tool", "status", "kind", "q"]) if (f[k]) q.set(k, f[k]);
+    if (f.when) q.set("since", String(Math.floor(Date.now() / 1000) - Number(f.when)));
+    if (cursor) q.set("cursor", cursor);
+    return "/api/audit?" + q.toString();
+  }
+  function paint() {
+    list.replaceChildren(...(entries.length ? entries.map(auditRow) : [el("p", { class: "muted" }, loading ? "Loading…" : "Nothing matches.")]));
+    more.hidden = !next;
+    more.textContent = meta && meta.scanned >= 100000 ? "Keep searching older entries" : "Show older";
+    info.textContent = note || (meta ? `${meta.files.length} file(s), ${bytesText(meta.files.reduce((a, x) => a + x.bytes, 0))} on disk.` : "");
+  }
+  async function load(more_) {
+    if (loading) return;
+    loading = true; note = "";
+    const r = await api(query(more_ ? next : null));
+    loading = false;
+    if (!r.ok) { note = r.body.error || "Could not read the log."; paint(); return; }
+    meta = r.body;
+    if (meta.stale) note = "The log was rotated while you were reading. Refresh to start again.";
+    entries = more_ ? entries.concat(meta.entries) : meta.entries;
+    next = meta.next;
+    paint();
+    if (!more_) buildHead();
+  }
+  more.addEventListener("click", () => load(true));
+
+  const head = el("div", {});
+  function buildHead() {
+    const s = meta.settings;
+    const fields = [
+      select("a-kind", "Show", Object.entries(KIND), f.kind),
+      el("div", { class: "field" }, el("label", { for: "a-backend" }, "Backend (exact name)"), el("input", { id: "a-backend", type: "text", list: "a-backends", autocomplete: "off", value: f.backend }),
+        el("datalist", { id: "a-backends" }, ...meta.backends.map((b) => el("option", { value: b })))),
+      select("a-status", "Result", [["", "Any"], ...meta.statuses.map((x) => [x, x])], f.status),
+      select("a-when", "Time", Object.entries(WHEN), f.when),
+      el("div", { class: "field" }, el("label", { for: "a-tool" }, "Tool contains"), el("input", { id: "a-tool", type: "text", autocomplete: "off", value: f.tool })),
+      el("div", { class: "field" }, el("label", { for: "a-q" }, "Search"), el("input", { id: "a-q", type: "search", autocomplete: "off", value: f.q })),
+    ];
+    const form_ = el("form", { class: "filters" }, ...fields, el("button", { type: "submit" }, "Apply"));
+    form_.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      f.kind = form_.querySelector("#a-kind").value; f.backend = form_.querySelector("#a-backend").value.trim();
+      f.status = form_.querySelector("#a-status").value; f.when = form_.querySelector("#a-when").value;
+      f.tool = form_.querySelector("#a-tool").value.trim(); f.q = form_.querySelector("#a-q").value.trim();
+      await load(false);
+    });
+    const refresh = el("button", { type: "button", class: "plain" }, "Refresh");
+    refresh.addEventListener("click", () => load(false));
+    const dl = el("a", { href: "/api/audit/download", download: "mcpgate-audit.jsonl", class: "button plain" }, "Download all");
+
+    const on = el("input", { id: "a-on", type: "checkbox" }); on.checked = s.enabled;
+    const mb = el("input", { id: "a-mb", type: "number", min: "1", max: "1000", value: String(s.max_mb) });
+    const keep = el("input", { id: "a-keep", type: "number", min: "1", max: "50", value: String(s.keep) });
+    const msg = el("p", { class: "note", role: "status" });
+    const sf = el("form", { class: "card" }, el("h3", {}, "Log settings"),
+      el("div", { class: "field check" }, on, el("label", { for: "a-on" }, "Record tool calls and admin actions")),
+      el("div", { class: "field" }, el("label", { for: "a-mb" }, "Start a new file at this size (MB)"), mb),
+      el("div", { class: "field" }, el("label", { for: "a-keep" }, "Old files to keep"), keep),
+      el("p", { class: "muted" }, "Secrets, passphrases and tokens are never written to the log. When the oldest kept file is full it is deleted."),
+      el("button", { type: "submit" }, "Save"), msg);
+    sf.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const r = await api("/api/audit/settings", "POST", { enabled: on.checked, max_mb: Number(mb.value), keep: Number(keep.value) });
+      msg.className = r.ok ? "note" : "msg";
+      msg.textContent = r.ok ? "Saved." : (r.body.error || "Could not save.");
+      if (r.ok) await load(false);
+    });
+    head.replaceChildren(el("div", { class: "row" }, refresh, dl), form_, el("details", {}, el("summary", {}, "Log settings"), sf));
+  }
+
+  box.append(el("h2", { id: "aud" }, "Activity log"),
+    el("p", { class: "muted" }, "Every tool call and every admin action, newest first. Open a row for the full record."), head, info, list, more);
+  paint();
+  await load(false);
+  return box;
+}
+
 async function after(r) {
   if (!r.ok) return r.body.error || "Something went wrong.";
   await render();
@@ -671,9 +779,10 @@ async function render() {
     const approvals = await approvalsSection();
     const bk = await backendsSection();
     const remote = await remoteSection();
+    const audit = await auditSection();
     const settings = await settingsSection(() => render());
     const add = await addSection(() => bk.reload(), () => settings.scrollIntoView());
-    page(el("p", {}, "You are signed in."), out, approvals, bk, add, remote, settings,
+    page(el("p", {}, "You are signed in."), out, approvals, bk, add, remote, audit, settings,
       form("Change passphrase", "", [field("Current passphrase", "current"), field("New passphrase (12+ characters)", "new", "password", { minlength: "12" })], "Change",
         async (v) => after(await api("/api/passphrase", "POST", { current: v.current, new: v.new }))));
     root.querySelector("h1").after(approvals.badge, approvals.live);

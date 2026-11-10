@@ -34,7 +34,7 @@ class Hub:
         self.policies = {n: Policy(c.allow, c.deny, c.confirm) for n, c in settings.backends.items()}
         self.store = ResultStore()
         self.approvals = None   # set by the long-running service: risky calls then wait for the owner in the admin UI
-        self.audit = Audit(settings.audit_log, self._scrub)
+        self.audit = Audit(settings.audit_log, self._scrub, settings.audit_max_mb * 1024 * 1024, settings.audit_keep)
         self._cache: dict[str, tuple[float, list, str]] = {}
         self._reload_lock = asyncio.Lock()
         self._pending: dict[str, tuple[str, str, float]] = {}
@@ -87,12 +87,12 @@ class Hub:
                 if name not in new.backends:
                     stopping.append(b)
                     removed.append(name)
-            audit_changed = new.audit_log != self.settings.audit_log
+            audit_changed = (new.audit_log, new.audit_max_mb, new.audit_keep) != (self.settings.audit_log, self.settings.audit_max_mb, self.settings.audit_keep)
             # one synchronous swap: no await between these lines, so no call sees a half-applied state
             self.settings, self.backends = new, kept
             self.policies = {n: Policy(c.allow, c.deny, c.confirm) for n, c in new.backends.items()}
             if audit_changed:
-                self.audit = Audit(new.audit_log, self._scrub)
+                self.audit = Audit(new.audit_log, self._scrub, new.audit_max_mb * 1024 * 1024, new.audit_keep)
             touched = set(added) | set(removed) | set(restarted) | set(updated)
             self._cache = {k: v for k, v in self._cache.items() if v[2] not in touched}
             await asyncio.gather(*(b.stop() for b in stopping), return_exceptions=True)

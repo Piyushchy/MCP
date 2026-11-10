@@ -183,12 +183,14 @@ class Settings:
     tools_ttl: float = 300.0         # seconds a backend's tool list is reused
     max_result_chars: int = 20000    # longer text results are cut and can be paged with read_result
     audit_log: str = ""              # JSONL file of every call ("" turns it off)
+    audit_max_mb: int = 10           # the log is rotated when it reaches this size
+    audit_keep: int = 5              # how many rotated files are kept (audit.jsonl.1 ... .N)
     custom_dir: str = ""             # folder of drop-in custom MCP servers ("" = default folder)
     backends: dict[str, Backend] = field(default_factory=dict)
     server: Server = field(default_factory=Server)
 
 
-_GATEWAY_KEYS = {"cache_ttl", "tools_ttl", "max_result_chars", "audit_log", "custom_dir"}
+_GATEWAY_KEYS = {"cache_ttl", "tools_ttl", "max_result_chars", "audit_log", "audit_max_mb", "audit_keep", "custom_dir"}
 _SERVER_KEYS = {"public_url", "port", "admin_port", "allow_hosts", "oauth_enabled", "oauth_redirect_hosts", "static_token_enabled",
                 "allow_custom_commands"}
 _BACKEND_KEYS = {"transport", "command", "args", "env", "cwd", "url", "headers", "allow", "deny",
@@ -225,6 +227,11 @@ def parse(data: dict) -> Settings:
         if not isinstance(g["max_result_chars"], int) or g["max_result_chars"] < 200:
             raise ConfigError("[gateway] max_result_chars must be an integer >= 200")
         s.max_result_chars = g["max_result_chars"]
+    for key, lo, hi in (("audit_max_mb", 1, 1000), ("audit_keep", 1, 50)):
+        if key in g:
+            if isinstance(g[key], bool) or not isinstance(g[key], int) or not lo <= g[key] <= hi:
+                raise ConfigError(f"[gateway] {key} must be a whole number from {lo} to {hi}")
+            setattr(s, key, g[key])
     for key in ("audit_log", "custom_dir"):
         if key in g:
             if not isinstance(g[key], str):
