@@ -242,6 +242,36 @@ def cmd_ui_code(args) -> int:
     return 0
 
 
+def cmd_service(args) -> int:
+    from . import service
+    try:
+        if args.action == "install":
+            r = service.install()
+            print(f"Service installed and started ({r['unit']}).")
+            print(f"Admin page: {r['url']}  (this computer only)")
+            if not r["lingering"]:
+                print("It will stop when you log out. To keep it running, run once:  sudo loginctl enable-linger $USER")
+        elif args.action == "status":
+            st = service.status()
+            print(f"service: {st['active']}, start at boot: {st['enabled']}, keeps running after logout: {'yes' if st['lingering'] else 'no'}")
+            print(f"admin page: {st['url']}")
+            if not st["unit_exists"]:
+                print("not installed. Run: mcpgate service install")
+        else:
+            if args.purge and not args.yes:
+                dirs = ", ".join(str(d) for d in service.data_dirs()) or "(none found)"
+                if input(f"This deletes ALL mcpgate data ({dirs}): your config, stored secrets, passphrases and sign-ins. Type DELETE to continue: ").strip() != "DELETE":
+                    print("Cancelled; nothing was removed.")
+                    return 1
+            r = service.uninstall(purge=args.purge)
+            print("Service removed." + ("" if not r["removed"] else " Deleted: " + ", ".join(r["removed"])))
+            if r["kept"]:
+                print("Your data was kept: " + ", ".join(r["kept"]) + "  (add --purge to delete it)")
+    except service.ServiceError as e:
+        raise ConfigError(str(e)) from None
+    return 0
+
+
 def cmd_serve(args) -> int:
     from . import oauth as oauthmod
     from . import serve
@@ -475,6 +505,12 @@ def parser() -> argparse.ArgumentParser:
     s.add_argument("--state-file", help="where OAuth clients and token hashes are kept (default: ~/.local/state/mcpgate/oauth.json)")
     s.add_argument("--oauth-redirect-host", action="append", help="allow another app's redirect host (default: claude.ai and localhost)")
     s.set_defaults(fn=cmd_serve)
+
+    sv = sub.add_parser("service", help="run mcpgate in the background as a systemd user service")
+    sv.add_argument("action", choices=["install", "uninstall", "status"])
+    sv.add_argument("--purge", action="store_true", help="with uninstall: also delete config, secrets and sign-ins")
+    sv.add_argument("--yes", action="store_true", help="with --purge: do not ask for confirmation")
+    sv.set_defaults(fn=cmd_service)
 
     sub.add_parser("init", help="create a starter config file").set_defaults(fn=cmd_init)
 
