@@ -130,6 +130,17 @@ class Backend:
         return d
 
 
+def private_dir(p: Path) -> None:
+    """Create the folder that holds config, secrets, passphrase hashes or state, readable by this user only.
+    Only a folder literally named "mcpgate" is tightened, so a path pointed at a shared folder is never changed."""
+    p.mkdir(parents=True, exist_ok=True)
+    if p.name == "mcpgate":
+        try:
+            os.chmod(p, 0o700)
+        except OSError:
+            pass
+
+
 def check_backend_url(url: str) -> str:
     """The address of a remote MCP server: https (http only for this computer), no embedded credentials,
     no other schemes. Addresses that still contain a ${NAME} are checked when they are expanded."""
@@ -326,7 +337,7 @@ def to_data(s: Settings) -> dict:
 
 def save(s: Settings, path: Path | str | None = None) -> Path:
     p = Path(path).expanduser() if path else config_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
+    private_dir(p.parent)
     tmp = p.with_suffix(".tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)   # private from the first byte
     with os.fdopen(fd, "w") as f:

@@ -443,14 +443,19 @@ def cmd_doctor(args) -> int:
     print(f"config: {path}" + ("" if path.exists() else " (not created yet, using defaults)"))
     s = _settings(args)  # a broken file raises ConfigError, reported by main()
     store = _secrets()
-    if path.exists() and (path.stat().st_mode & 0o077):
-        bad(f"{path} is readable by other users; run: chmod 600 {path}")
+    from . import oauth as oauthmod
+    private = [path, store.path, _auth_store().path, oauthmod.default_state_path()]
+    if s.audit_log:
+        private.append(Path(s.audit_log).expanduser())
+    for f in private:
+        if f.exists() and (f.stat().st_mode & 0o077):
+            bad(f"{f} is readable by other users; run: chmod 600 {f}")
     folder = custom.folder(s)
     drop_ins = [n for n, b in s.backends.items() if b.source == "custom"]
     print(f"custom folder: {folder} ({len(drop_ins)} server(s))")
     if not s.backends:
         print("  no backends yet")
-        return 0
+        return 1 if problems else 0
 
     for name, b in sorted(s.backends.items()):
         print(f"{name} ({b.transport}{', off' if not b.enabled else ''})")

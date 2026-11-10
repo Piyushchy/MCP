@@ -9,6 +9,8 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+from .config import private_dir
+
 try:
     import fcntl
 except ImportError:   # not on Windows; there the in-process lock still applies
@@ -80,7 +82,7 @@ class Audit:
             fields["args"] = redact(fields["args"])
         fields = {"ts": round(time.time(), 3), **fields}
         try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
+            private_dir(self.path.parent)
             line = json.dumps(fields, default=str)
             data = ((self.scrub(line) if self.scrub else line) + "\n").encode()
             with self._locked():

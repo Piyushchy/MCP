@@ -28,6 +28,8 @@ from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 
+from .config import private_dir
+
 SCOPE = "mcp"
 ACCESS_TTL = 3600
 REFRESH_TTL = 30 * 86400
@@ -83,7 +85,7 @@ class Store:
             idle = sorted((c for c in clients if c not in live), key=lambda c: clients[c].get("client_id_issued_at") or 0)
             for c in idle[: len(clients) - MAX_CLIENTS]:
                 del clients[c]
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        private_dir(self.path.parent)
         tmp = self.path.with_suffix(".tmp")
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
