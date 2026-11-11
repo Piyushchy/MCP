@@ -206,7 +206,7 @@ async def test_every_action_that_can_run_code_or_open_access_needs_the_passphras
         assert "mine" not in r.hub.settings.backends and r.hub.settings.backends["off"].enabled is False
     async with rig(tmp_path / "b", {"demo": demo()}) as r:                               # the switch itself is gated too
         (tmp_path / "b").mkdir(exist_ok=True)
-        resp = await r.post("/api/settings/custom-commands", {"enabled": True, "confirm": "ALLOW PROGRAMS"})
+        resp = await r.post("/api/settings/custom-commands", {"enabled": True})
         assert resp.status_code == 403 and resp.json().get("stepup") is True and r.ctx.file_settings().server.allow_custom_commands is False
 
 

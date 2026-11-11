@@ -83,8 +83,8 @@ show it again, and they are kept out of logs, the audit log and error messages. 
 (or at once on `SIGHUP`). A config with an error never replaces the working one; the page shows what is wrong.
 
 **Things that need you to type the passphrase again.** Anything that can run code on your computer (adding a
-command backend, changing a command) asks for your admin passphrase again, and enabling custom commands also needs
-the typed words `ALLOW PROGRAMS`. They are off by default. Presets work without that switch.
+command backend, changing a command) asks for your admin passphrase again. Custom commands are available by default; you can turn the whole
+feature off in Settings.
 
 **From another computer.** The admin page stays on loopback; forward it over SSH
 (`ssh -L 8767:127.0.0.1:8767 you@server`) and browse to `http://127.0.0.1:8767` on your laptop.

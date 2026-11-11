@@ -171,6 +171,8 @@ def make_app(port: int, extra: list[Spec] | None = None, auth=None, ctx=None) ->
         specs += audit_routes(ctx)
         from .wizard_api import routes as wizard_routes
         specs += wizard_routes(ctx)
+        from .secrets_api import routes as secret_routes
+        specs += secret_routes(ctx)
     routes = [Route(s.path, _enforced(s, auth), methods=list(s.methods)) for s in specs]
 
     async def not_found(request, exc):

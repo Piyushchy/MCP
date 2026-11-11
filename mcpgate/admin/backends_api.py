@@ -10,7 +10,7 @@ from starlette.responses import JSONResponse, Response
 
 from ..backends import Backend as Conn
 from ..config import NAME_RE
-from . import addbackend, friendly
+from . import addbackend, editbackend, friendly
 from .api import body
 from .app import Spec
 from .context import AdminContext
@@ -195,14 +195,43 @@ def routes(ctx: AdminContext) -> list[Spec]:
         if on:
             if not ctx.auth.stepup_ok(request.state.session):
                 return JSONResponse({"error": "re-enter your passphrase to allow programs to be added", "stepup": True}, status_code=403)
-            if d.get("confirm") != "ALLOW PROGRAMS":
-                raise AuthError(400, "type ALLOW PROGRAMS to confirm")
 
         def change(s):
             s.server.allow_custom_commands = on
         await ctx.edit(change)
         ctx.audit(event="admin_custom_commands_on" if on else "admin_custom_commands_off")
         return JSONResponse({"custom_commands": ctx.hub.settings.server.allow_custom_commands})
+
+    async def edit_get(request: Request) -> Response:
+        b = find(request)
+        need_editable(b)
+        return JSONResponse(editbackend.view(ctx, b.cfg))
+
+    async def edit_post(request: Request) -> Response:
+        b = find(request)
+        need_editable(b)
+        d = await body(request)
+        new, secrets, runs_program = editbackend.plan(ctx, b.cfg, d)
+        if runs_program and not ctx.auth.stepup_ok(request.state.session):
+            return JSONResponse({"error": "re-enter your passphrase to change what program runs on this computer", "stepup": True}, status_code=403)
+        before = {n: ctx.secrets.get(n) for n in secrets}
+        for n, v in secrets.items():
+            ctx.secrets.set(n, v)
+
+        def change(s):
+            if b.name not in s.backends:
+                raise AuthError(404, "that backend is not in the config file")
+            s.backends[b.name] = new
+        try:
+            await ctx.edit(change)
+        except AuthError:
+            for n, old in before.items():
+                ctx.secrets.set(n, old) if old else ctx.secrets.delete(n)
+            raise
+        restarted = await ctx.hub.apply_secret_changes()
+        ctx.audit(event="admin_backend_edit", backend=b.name, fields=sorted(k for k in d if k not in ("set_secrets", "confirm")),
+                  secrets_stored=sorted(secrets), restarted=restarted)
+        return JSONResponse({"backend": row(ctx, ctx.hub.backends[b.name])})
 
     P = "/api/backends/{name}"
     return [
@@ -212,6 +241,8 @@ def routes(ctx: AdminContext) -> list[Spec]:
         Spec("/api/backends/add", ("POST",), add, csrf=True),
         Spec("/api/settings", ("GET",), settings_get),
         Spec("/api/settings/custom-commands", ("POST",), settings_commands, csrf=True),
+        Spec(f"{P}/edit", ("GET",), edit_get),
+        Spec(f"{P}/edit", ("POST",), edit_post, csrf=True),
         Spec(f"{P}/impact", ("GET",), removal_impact),
         Spec(f"{P}/enable", ("POST",), enable, csrf=True),
         Spec(f"{P}/disable", ("POST",), disable, csrf=True),

@@ -184,19 +184,17 @@ async def test_existing_command_backend_cannot_be_enabled_while_switch_off(tmp_p
         assert (await r.post("/api/backends/demo/disable")).status_code == 200      # turning off is always allowed
 
 
-async def test_switch_needs_stepup_and_typed_confirmation(tmp_path):
+async def test_switch_needs_stepup(tmp_path):
     async with rig(tmp_path, {}) as r:
-        on = {"enabled": True, "confirm": "ALLOW PROGRAMS"}
+        on = {"enabled": True}
         resp = await r.post("/api/settings/custom-commands", on)
         assert resp.status_code == 403 and resp.json()["stepup"] is True
         await r.stepup()
-        assert (await r.post("/api/settings/custom-commands", {"enabled": True})).status_code == 400
-        assert (await r.post("/api/settings/custom-commands", {"enabled": True, "confirm": "yes"})).status_code == 400
-        assert (await r.post("/api/settings/custom-commands", {"enabled": "true", "confirm": "ALLOW PROGRAMS"})).status_code == 400
+        assert (await r.post("/api/settings/custom-commands", {"enabled": "true"})).status_code == 400
         assert (await r.get("/api/settings")).json() == {"custom_commands": False}
         assert (await r.post("/api/settings/custom-commands", on)).json() == {"custom_commands": True}
-        assert "allow_custom_commands = true" in r.file_text()
         assert (await r.post("/api/settings/custom-commands", {"enabled": False})).json() == {"custom_commands": False}
+        assert "allow_custom_commands = false" in r.file_text()
         events = [json.loads(x)["event"] for x in r.audit_text().splitlines() if "custom_commands" in x]
         assert events == ["admin_custom_commands_on", "admin_custom_commands_off"]
 

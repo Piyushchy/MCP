@@ -185,7 +185,7 @@ class Server:
     oauth_enabled: bool = False
     oauth_redirect_hosts: list[str] = field(default_factory=list)
     static_token_enabled: bool = False
-    allow_custom_commands: bool = False   # the admin UI may create or enable programs that run on this computer
+    allow_custom_commands: bool = True    # the admin UI may add programs that run on this computer (each one asks for the passphrase again)
     wizard_done: bool = False             # the first-run setup guide was finished or skipped
 
 
