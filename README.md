@@ -66,7 +66,7 @@ It opens once on a fresh install and can be reopened from **Settings**.
 | **Approvals** | **Remote access** |
 | ![Approvals](docs/screenshots/approvals-light.png) | ![Remote access](docs/screenshots/remote-light.png) |
 
-All pages follow the system light or dark theme; dark versions are in [docs/screenshots](docs/screenshots).
+All pages follow the system light or dark theme; dark versions are in [docs/screenshots](docs/screenshots). The page works with a keyboard alone, at phone width, and with reduced motion; `tests/test_a11y_browser.py` checks contrast, labels, focus outlines and overflow (set `MCPGATE_AXE` to an axe-core file to add axe).
 
 **Secrets.** Values you enter (tokens, API keys) are stored in `~/.config/mcpgate/secrets.json` (mode 600) and
 referenced as `${NAME}` in backend settings. They are write-only: the page can replace or delete one but can never

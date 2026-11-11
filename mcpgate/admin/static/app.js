@@ -14,11 +14,24 @@ async function api(path, method = "GET", data) {
   const headers = {};
   if (data !== undefined) headers["content-type"] = "application/json";
   if (method !== "GET" && csrf) headers["x-csrf-token"] = csrf;
-  const r = await fetch(path, { method, headers, credentials: "same-origin", body: data === undefined ? undefined : JSON.stringify(data) });
+  let r;
+  try {
+    r = await fetch(path, { method, headers, credentials: "same-origin", body: data === undefined ? undefined : JSON.stringify(data) });
+  } catch (e) {
+    return { ok: false, status: 0, body: { error: "Cannot reach mcpgate. Check that it is running (mcpgate service status), then try again." } };
+  }
   let body = {};
   try { body = await r.json(); } catch (e) { /* not JSON */ }
+  if (r.status === 401 && !QUIET_401.has(path) && !expiring) {
+    expiring = true;
+    csrf = "";
+    render().finally(() => { expiring = false; });
+    return { ok: false, status: 401, body: { error: "Your session ended. Sign in again." } };
+  }
   return { ok: r.ok, status: r.status, body };
 }
+const QUIET_401 = new Set(["/api/login", "/api/setup", "/api/session", "/api/passphrase"]);
+let expiring = false;
 
 function field(label, name, type = "password", extra = {}) {
   const id = "f-" + name;
@@ -252,10 +265,10 @@ async function backendsSection() {
   const box = el("section", { "aria-labelledby": "bk" }, el("h2", { id: "bk" }, "Backends"));
   async function load() {
     const r = await api("/api/backends");
-    if (!r.ok) { box.replaceChildren(el("h2", { id: "bk" }, "Backends"), el("p", { class: "msg" }, "Could not load backends.")); return; }
+    if (!r.ok) { box.replaceChildren(el("h2", { id: "bk" }, "Backends"), el("p", { class: "msg", role: "alert" }, "Could not load backends. Reload the page; if it keeps failing, run mcpgate doctor.")); return; }
     const kids = [el("h2", { id: "bk" }, "Backends")];
     if (r.body.config_error) kids.push(el("p", { class: "msg", role: "alert" }, "The config file has an error, so the last good settings are still running: " + r.body.config_error));
-    if (!r.body.backends.length) kids.push(el("p", { class: "muted" }, "No backends yet."));
+    if (!r.body.backends.length) kids.push(el("p", { class: "muted" }, "No backends yet. Add one in the \"Add a backend\" section below, or open the setup guide in Settings."));
     for (const b of r.body.backends) kids.push(backendCard(b, load));
     box.replaceChildren(...kids);
   }
@@ -524,7 +537,7 @@ async function remoteSection() {
       const b = el("button", { type: "button" }, "Restart now");
       b.addEventListener("click", async () => {
         const r = await act("/api/remote/restart");
-        say("restart", r.ok ? "Restarting. This page reconnects in a few seconds; reload it if it does not." : (r.body.error || "Could not restart."), !r.ok);
+        say("restart", r.ok ? "Restarting. This page reconnects in a few seconds; reload it if it does not." : (r.body.error || "Could not restart. Run mcpgate service status to see why."), !r.ok);
         await refresh();
       });
       kids.push(el("div", { class: "banner", role: "status" }, el("p", {}, "Saved changes will apply after the service restarts." +
@@ -549,7 +562,7 @@ async function remoteSection() {
       const r = await api("/api/remote/settings", "POST", {
         public_url: url.value.trim(), port: Number(port.value),
         allow_hosts: hosts.value.split(",").map((x) => x.trim()).filter(Boolean), oauth_enabled: oauth.checked });
-      say("settings", r.ok ? "Saved." : (r.body.error || "Could not save."), !r.ok);
+      say("settings", r.ok ? "Saved." : (r.body.error || "Could not save. Check the values and try again."), !r.ok);
       await refresh();
     });
     kids.push(sf);
@@ -568,7 +581,7 @@ async function remoteSection() {
       ev.preventDefault();
       const r = await act("/api/remote/passphrase", { passphrase: pw.value, keep_sessions: keep.checked });
       pw.value = "";
-      say("pass", r.ok ? "Passphrase saved." : (r.body.error || "Could not save."), !r.ok);
+      say("pass", r.ok ? "Passphrase saved." : (r.body.error || "Could not save. Check the values and try again."), !r.ok);
       await refresh();
     });
     kids.push(pf);
@@ -583,13 +596,13 @@ async function remoteSection() {
     const make = el("button", { type: "button" }, st.token.set ? "Create a new token" : "Create token");
     make.addEventListener("click", async () => {
       const r = await act("/api/remote/token");
-      if (r.ok) { token = r.body.token; } else say("token", r.body.error || "Could not create a token.", true);
+      if (r.ok) { token = r.body.token; } else say("token", r.body.error || "Could not create a token. Try again; if it keeps failing, run mcpgate doctor.", true);
       await refresh();
     });
     tk.push(make);
     if (st.token.set) {
-      const rm = el("button", { type: "button", class: "plain" }, "Remove token");
-      rm.addEventListener("click", async () => { token = ""; await act("/api/remote/token/remove"); await refresh(); });
+      const rm = el("button", { type: "button", class: "danger" }, "Remove token");
+      rm.addEventListener("click", async () => { if (!window.confirm("Remove the access token? Anything using it stops working until you create a new one.")) return; token = ""; await act("/api/remote/token/remove"); await refresh(); });
       tk.push(rm);
     }
     tk.push(note("token"));
@@ -602,7 +615,7 @@ async function remoteSection() {
       chk.disabled = true;
       const r = await api("/api/remote/check", "POST", {});
       checkResult = r.ok ? r.body : null;
-      say("check", r.ok ? "" : (r.body.error || "The check failed."), !r.ok);
+      say("check", r.ok ? "" : (r.body.error || "The check failed. Try again in a moment."), !r.ok);
       await refresh();
     });
     const list = el("ul", { class: "checks" });
@@ -631,8 +644,8 @@ async function remoteSection() {
     if (!st.clients.length) apps.push(el("p", { class: "muted" }, "No apps are signed in."));
     for (const c of st.clients) {
       const mine = st.sessions.filter((x) => x.client_id === c.client_id);
-      const rm = el("button", { type: "button", class: "plain" }, "Remove app");
-      rm.addEventListener("click", async () => { await act("/api/remote/clients/" + encodeURIComponent(c.client_id) + "/remove"); await refresh(); });
+      const rm = el("button", { type: "button", class: "danger" }, "Remove app");
+      rm.addEventListener("click", async () => { if (!window.confirm(`Remove ${c.name}? It will be signed out and must be approved again to reconnect.`)) return; await act("/api/remote/clients/" + encodeURIComponent(c.client_id) + "/remove"); await refresh(); });
       const row = el("div", { class: "approval" }, el("strong", {}, c.name), el("span", { class: "muted" }, ` ${mine.length} signed in, last used ${ago(c.last_used)} `), rm);
       for (const x of mine) {
         const so = el("button", { type: "button", class: "plain" }, "Sign out");
@@ -642,8 +655,8 @@ async function remoteSection() {
       apps.push(row);
     }
     if (st.clients.length) {
-      const all = el("button", { type: "button" }, "Sign out everywhere");
-      all.addEventListener("click", async () => { await act("/api/remote/signout-all"); await refresh(); });
+      const all = el("button", { type: "button", class: "danger" }, "Sign out everywhere");
+      all.addEventListener("click", async () => { if (!window.confirm("Sign every app out? Each one has to be approved again.")) return; await act("/api/remote/signout-all"); await refresh(); });
       apps.push(all);
     }
     kids.push(el("div", { class: "card" }, ...apps));
@@ -700,7 +713,7 @@ async function auditSection() {
     loading = true; note = "";
     const r = await api(query(more_ ? next : null));
     loading = false;
-    if (!r.ok) { note = r.body.error || "Could not read the log."; paint(); return; }
+    if (!r.ok) { note = r.body.error || "Could not read the log. Reload the page, or check that the log folder is readable."; paint(); return; }
     meta = r.body;
     if (meta.stale) note = "The log was rotated while you were reading. Refresh to start again.";
     entries = more_ ? entries.concat(meta.entries) : meta.entries;
@@ -748,7 +761,7 @@ async function auditSection() {
       ev.preventDefault();
       const r = await api("/api/audit/settings", "POST", { enabled: on.checked, max_mb: Number(mb.value), keep: Number(keep.value) });
       msg.className = r.ok ? "note" : "msg";
-      msg.textContent = r.ok ? "Saved." : (r.body.error || "Could not save.");
+      msg.textContent = r.ok ? "Saved." : (r.body.error || "Could not save. Check the values and try again.");
       if (r.ok) await load(false);
     });
     head.replaceChildren(el("div", { class: "row" }, refresh, dl), form_, el("details", {}, el("summary", {}, "Log settings"), sf));
@@ -810,7 +823,7 @@ async function wizardSection(close) {
     const out = el("div", { "aria-live": "polite" });
     const again = el("button", { type: "button" }, "Test again");
     const cont = el("button", { type: "button", class: "plain" }, "Continue");
-    const undo = el("button", { type: "button", class: "plain" }, "Remove it and start over");
+    const undo = el("button", { type: "button", class: "danger" }, "Remove it and start over");
     const paint = (t) => {
       if (!t) { out.replaceChildren(el("p", {}, "Testing…")); return; }
       if (t.ok) {
@@ -830,8 +843,9 @@ async function wizardSection(close) {
     again.addEventListener("click", run);
     cont.addEventListener("click", () => next(4));
     undo.addEventListener("click", async () => {
+      if (!window.confirm(`Remove “${target}” and its stored secrets, and start over?`)) return;
       const r = await act(`/api/backends/${encodeURIComponent(target)}/remove`, { confirm: true, delete_secrets: true });
-      if (!r.ok) { out.replaceChildren(el("p", { class: "msg", role: "alert" }, r.body.error || "Could not remove it.")); return; }
+      if (!r.ok) { out.replaceChildren(el("p", { class: "msg", role: "alert" }, r.body.error || "Could not remove it. Reload the page and try again.")); return; }
       target = ""; lastTest = null; next(2);
     });
     frame(el("p", {}, `Testing “${target}”.`), out, el("div", { class: "row" }, again, cont, undo));
@@ -881,14 +895,22 @@ async function wizardSection(close) {
 }
 
 async function after(r) {
-  if (!r.ok) return r.body.error || "Something went wrong.";
+  if (!r.ok) return r.body.error || "Something went wrong. Reload the page and try again.";
   await render();
   return "";
 }
 
 async function render() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-  const { body: s } = await api("/api/session");
+  const { status: sessionStatus, body: s } = await api("/api/session");
+  if (sessionStatus !== 200) {
+    const again = el("button", { type: "button" }, "Try again");
+    again.addEventListener("click", () => render());
+    page(el("section", { class: "card", "aria-labelledby": "off" }, el("h2", { id: "off" }, "Cannot reach mcpgate"),
+      el("p", {}, "The page could not talk to the gateway. It may be restarting or stopped."),
+      el("p", { class: "muted" }, "Check it with: mcpgate service status. Start it with: mcpgate service install."), again));
+    return;
+  }
   csrf = s.csrf || "";
   if (s.state === "setup") {
     page(form("Set up", "Enter the setup code printed in the terminal where mcpgate runs (or run: mcpgate ui-code), then choose an admin passphrase.",
