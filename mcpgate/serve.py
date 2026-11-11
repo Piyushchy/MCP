@@ -33,6 +33,17 @@ def transport_security(allow_hosts: list[str]) -> TransportSecuritySettings | No
     return TransportSecuritySettings(enable_dns_rebinding_protection=True, allowed_hosts=hosts)
 
 
+def allowed_hosts(extra: list[str], configured: list[str], public_url: str = "") -> list[str]:
+    """Host names the HTTP server accepts: the ones given, plus the host of the public address, which is
+    the one a tunnel always forwards (leaving it out made every connection fail with 'Invalid Host header')."""
+    from urllib.parse import urlsplit
+    hosts = [*extra, *configured]
+    name = (urlsplit(public_url).hostname or "").lower() if public_url else ""
+    if name:
+        hosts.append(name)
+    return list(dict.fromkeys(h.lower() for h in hosts))
+
+
 class BearerAuth:
     """ASGI wrapper: every HTTP request must carry 'Authorization: Bearer <token>'."""
 

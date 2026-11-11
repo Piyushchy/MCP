@@ -317,7 +317,7 @@ def cmd_serve(args) -> int:
         elif not token and not verify and not serve.is_loopback(host):
             raise ConfigError(f"listening on {host} needs a token or OAuth: run 'mcpgate auth token' "
                               f"(or set {args.token_env}), or set a public address for OAuth")
-        sec = serve.transport_security(list(args.allow_host or []) + list(srv.allow_hosts))
+        sec = serve.transport_security(serve.allowed_hosts(list(args.allow_host or []), list(srv.allow_hosts), public_url))
         kwargs = {"host": host, "port": port, **({"transport_security": sec} if sec else {})}
     from .hub import Hub
     hub = Hub(s, secrets=_secrets())

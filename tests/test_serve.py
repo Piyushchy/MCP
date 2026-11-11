@@ -118,3 +118,24 @@ async def test_default_server_rejects_a_foreign_host_header():
         srv.should_exit = True
         await asyncio.wait_for(task, 20)
         await hub.stop()
+
+
+def test_the_public_address_host_is_always_allowed():
+    hosts = serve.allowed_hosts([], [], "https://Piyush.tail799736.ts.net/")
+    assert hosts == ["piyush.tail799736.ts.net"]
+    assert serve.allowed_hosts(["a.example"], ["b.example", "a.example"], "https://c.example") == ["a.example", "b.example", "c.example"]
+    assert serve.allowed_hosts([], [], "") == []
+    assert serve.transport_security(serve.allowed_hosts([], [], "")) is None
+
+
+async def test_a_gateway_with_only_a_public_address_accepts_that_host_and_rejects_others():
+    sec = serve.transport_security(serve.allowed_hosts([], [], "https://box.tail1234.ts.net"))
+    app, hub = server.build(Settings(), transport_security=sec)
+    srv, task, url = await run_server(app, TOKEN)
+    try:
+        assert await _status(url, "box.tail1234.ts.net", TOKEN) == 200
+        assert await _status(url, "evil.example.com", TOKEN) in (400, 421)
+    finally:
+        srv.should_exit = True
+        await asyncio.wait_for(task, 20)
+        await hub.stop()
