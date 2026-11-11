@@ -92,6 +92,7 @@ const STATE_LABEL = { connected: "Connected", idle: "Idle (starts when used)", e
 
 const notes = {};   // the last message per backend, kept across refreshes
 const openPolicy = {};   // which permission panels are open, kept across refreshes
+const openEdit = {};     // which edit panels are open
 
 const STATE_NAMES = { allow: "Allowed", confirm: "Needs my approval", block: "Blocked" };
 const DELETES = /(^|_)(delete|remove|drop|destroy|wipe|purge|erase|clear|truncate)(_|$)/i;
@@ -243,6 +244,15 @@ function backendCard(b, reload) {
       if (r.ok) { delete notes[b.name]; reload(); } else say(r.body.error || "Failed.", true);
     }, "danger"));
   }
+  const editBox = el("div", {});
+  if (!b.readonly) {
+    buttons.unshift(btn("Edit", async () => {
+      if (editBox.firstChild) { editBox.replaceChildren(); delete openEdit[b.name]; return; }
+      openEdit[b.name] = true;
+      editBox.replaceChildren(editPanel(b, reload));
+    }));
+    if (openEdit[b.name]) editBox.replaceChildren(editPanel(b, reload));
+  }
   const panelBox = el("div", {});
   const perm = btn("Permissions", async () => {
     if (panelBox.firstChild) { panelBox.replaceChildren(); delete openPolicy[b.name]; return; }
@@ -253,14 +263,178 @@ function backendCard(b, reload) {
   if (openPolicy[b.name]) panelBox.replaceChildren(policyPanel(b, reload));
   const meta = [b.transport, b.source, b.target].filter(Boolean).join(" · ");
   const tools = b.tools_visible === null ? "tools: not loaded yet" : `tools: ${b.tools_visible} visible${b.tools_hidden ? `, ${b.tools_hidden} hidden` : ""}`;
-  const secrets = b.secrets.length ? "secrets: " + b.secrets.map((x) => `${x.name} (${x.set ? "set" : "NOT set"})`).join(", ") : "";
+  const missing = b.secrets.filter((x) => !x.set).map((x) => x.name);
+  const secrets = missing.length ? "missing credential: " + missing.join(", ") + ". Use Edit to add it." : "";
   return el("article", { class: "card backend", "data-name": b.name },
     el("h3", {}, b.name, " ", el("span", { class: "pill " + b.state }, STATE_LABEL[b.state])),
     b.description ? el("p", {}, b.description) : "",
     el("p", { class: "muted" }, meta), el("p", { class: "muted" }, tools + (secrets ? " · " + secrets : "")),
     b.path ? el("p", { class: "muted" }, "File: " + b.path + " (drop-in, managed as a file)") : "",
     b.error ? el("p", { class: "msg" }, b.error, b.error_hint ? el("br") : "", b.error_hint ? el("span", { class: "muted" }, b.error_hint) : "") : "",
-    el("div", { class: "row" }, ...buttons), note, panelBox);
+    el("div", { class: "row" }, ...buttons), note, editBox, panelBox);
+}
+
+
+// ---- credentials, editing a backend ---------------------------------------------------------------
+// A credential is something mcpgate uses to sign in to a backend (a GitHub token, an API key). The page can store or
+// replace one, and says whether one is stored, but can never show it again.
+function credentialRow(c, label, afterSave, note) {
+  const input = el("input", { type: "password", autocomplete: "new-password", spellcheck: "false", id: "cred-" + c.name,
+    placeholder: c.set ? "Paste a new value to replace the stored one" : "Paste the value here" });
+  const save = el("button", { type: "button" }, c.set ? "Replace" : "Save");
+  save.disabled = true;
+  input.addEventListener("input", () => { save.disabled = !input.value.trim(); });
+  const msg = el("p", { class: "note", role: "status" }, note || "");
+  save.addEventListener("click", async () => {
+    save.disabled = true;
+    const r = await act("/api/secrets/" + encodeURIComponent(c.name), { value: input.value });
+    input.value = "";
+    if (r.ok) { msg.className = "note"; msg.textContent = r.body.restarted.length ? "Saved. " + r.body.restarted.join(", ") + " restarted with the new value." : "Saved."; afterSave(); }
+    else { msg.className = "msg"; msg.textContent = r.body.error || "Could not save. Try again."; save.disabled = false; }
+  });
+  return el("div", { class: "cred" },
+    el("label", { for: "cred-" + c.name }, label || c.name, " ", el("span", { class: "pill " + (c.set ? "connected" : "error") }, c.set ? "Stored" : "Missing")),
+    el("div", { class: "inline" }, input, save), msg);
+}
+
+let presetLabels = null;
+async function labelsForSecrets() {
+  if (presetLabels) return presetLabels;
+  const r = await api("/api/presets");
+  presetLabels = {};
+  if (r.ok) for (const p of r.body.presets) for (const f of p.fields) presetLabels[f.secret_name] = f.label;
+  return presetLabels;
+}
+
+function editRows(title, nameLabel, initial) {
+  const list = el("div", { class: "rows" });
+  const rows = [];
+  function addRow(item) {
+    const name = el("input", { type: "text", "aria-label": nameLabel + " name", autocomplete: "off", spellcheck: "false", placeholder: nameLabel, value: item.name || "" });
+    const gone = el("button", { type: "button", class: "plain tiny", "aria-label": "Remove this " + nameLabel.toLowerCase() }, "Remove");
+    let rec;
+    let row;
+    if (item.secret) {
+      row = el("div", { class: "row3 keep" }, name, el("span", { class: "muted" }, "Stored secret. Replace it under Credentials."), gone);
+      rec = { name, ref: item.secret, row };
+    } else {
+      const value = el("input", { type: "text", "aria-label": nameLabel + " value", autocomplete: "off", spellcheck: "false", placeholder: "value", value: item.value || "" });
+      const box = el("input", { type: "checkbox", "aria-label": "store this value as a secret" });
+      box.addEventListener("change", () => { value.type = box.checked ? "password" : "text"; });
+      row = el("div", { class: "row3" }, name, value, el("label", { class: "check" }, box, " secret"), gone);
+      rec = { name, value, box, row };
+    }
+    gone.addEventListener("click", () => { row.remove(); rows.splice(rows.indexOf(rec), 1); });
+    rows.push(rec);
+    list.append(row);
+  }
+  for (const it of initial) addRow(it);
+  const more = el("button", { type: "button", class: "plain" }, "Add " + nameLabel.toLowerCase());
+  more.addEventListener("click", () => addRow({}));
+  return { node: el("div", { class: "field" }, el("p", { class: "label" }, title), list, more),
+    get: () => rows.filter((r) => r.name.value.trim()).map((r) => r.ref ? { name: r.name.value.trim(), secret: r.ref } : { name: r.name.value.trim(), value: r.value.value, secret: r.box.checked }) };
+}
+
+function editPanel(b, reload) {
+  const box = el("div", { class: "edit" }, el("p", { class: "muted" }, "Loading…"));
+  (async () => {
+    const r = await api(`/api/backends/${b.name}/edit`);
+    if (!r.ok) { box.replaceChildren(el("p", { class: "msg", role: "alert" }, r.body.error || "Could not load the settings.")); return; }
+    const v = r.body;
+    const labels = await labelsForSecrets();
+    const parts = [];
+    if (v.secrets.length) {
+      parts.push(el("div", { class: "block" }, el("h4", {}, "Credentials"),
+        el("p", { class: "muted" }, "What mcpgate uses to sign in to this backend. They are stored on this computer and never shown again; paste a new value to replace one."),
+        ...v.secrets.map((c) => credentialRow(c, labels[c.name] ? `${labels[c.name]} (${c.name})` : c.name, reload))));
+    }
+    const msg = el("p", { class: "msg", role: "alert" });
+    const done = el("p", { class: "note", role: "status" });
+    const f = el("form", { class: "block" }, el("h4", {}, "Settings"));
+    const text = (label, name, value, extra = {}) => field(label, name + "-" + b.name, "text", { name, value: value || "", autocomplete: "off", required: null, ...extra });
+    f.append(text("Description", "description", v.description));
+    let headers = null, env = null;
+    if (!v.preset) {
+      if (v.runs_program) {
+        f.append(text("Command", "command", v.command, { required: "" }));
+        const args = el("textarea", { name: "args", id: "f-args-" + b.name, rows: "3", spellcheck: "false", autocomplete: "off" }, v.args.join("\n"));
+        f.append(el("div", { class: "field" }, el("label", { for: "f-args-" + b.name }, "Arguments (one per line)"), args));
+        f.append(text("Working folder (optional)", "cwd", v.cwd));
+        env = editRows("Environment values", "Variable", v.env);
+        f.append(env.node);
+      } else {
+        f.append(text("Address (URL)", "url", v.url, { required: "" }));
+        headers = editRows("Request headers (for example Authorization)", "Header", v.headers);
+        f.append(headers.node);
+      }
+      f.append(text("Start timeout, seconds", "start_timeout", String(v.start_timeout), { inputmode: "numeric" }));
+    }
+    const save = el("button", { type: "submit" }, "Save changes");
+    f.append(el("div", { class: "row" }, save), msg, done);
+    f.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      msg.textContent = ""; done.textContent = "";
+      const fd = new FormData(f);
+      const data = { description: fd.get("description") };
+      if (!v.preset) {
+        data.start_timeout = Number(fd.get("start_timeout")) || undefined;
+        if (v.runs_program) { data.command = fd.get("command"); data.args = String(fd.get("args")).split("\n").map((x) => x.trim()).filter(Boolean); data.cwd = fd.get("cwd"); data.env = env.get(); }
+        else { data.url = fd.get("url"); data.headers = headers.get(); }
+      }
+      save.disabled = true;
+      const res = await act(`/api/backends/${b.name}/edit`, data);
+      save.disabled = false;
+      if (!res.ok) { msg.textContent = res.body.error || "Could not save. Check the values and try again."; return; }
+      done.textContent = "Saved.";
+      notes[b.name] = { t: "Saved.", bad: false };
+      reload();
+    });
+    parts.push(f);
+    box.replaceChildren(...parts);
+  })();
+  return box;
+}
+
+// ---- the credentials page ---------------------------------------------------------------------------
+async function secretsSection() {
+  const box = el("section", { "aria-labelledby": "sec" });
+  async function load() {
+    const r = await api("/api/secrets");
+    const kids = [el("h2", { id: "sec", tabindex: "-1" }, "Credentials"),
+      el("p", { class: "muted" }, "The tokens and keys mcpgate uses to sign in to your backends, such as a GitHub token. They are stored on this computer in a private file and are never shown again; you can only replace or delete them. (Tokens, on the Tokens page, are the opposite direction: what apps use to reach mcpgate.)")];
+    if (!r.ok) { kids.push(el("p", { class: "msg", role: "alert" }, r.body.error || "Could not load the credentials. Reload the page.")); box.replaceChildren(...kids); return; }
+    if (!r.body.secrets.length) kids.push(el("p", { class: "muted" }, "Nothing is stored yet. Add a backend that needs a token and it appears here."));
+    for (const c of r.body.secrets) {
+      const del = el("button", { type: "button", class: "danger" }, "Delete");
+      del.addEventListener("click", async () => {
+        const used = c.used_by.length ? ` ${c.used_by.join(", ")} will stop working until you store a new one.` : "";
+        if (!window.confirm(`Delete ${c.name}?${used}`)) return;
+        const d = await act("/api/secrets/" + encodeURIComponent(c.name) + "/delete", { confirm: true });
+        if (d.ok) load(); else window.alert(d.body.error || "Could not delete it.");
+      });
+      kids.push(el("div", { class: "card wide cred-card" },
+        credentialRow(c, c.name, load),
+        el("p", { class: "muted small" }, (c.used_by.length ? "Used by: " + c.used_by.join(", ") + "." : "Not used by any backend right now.") + (c.updated ? ` Last changed ${ago(c.updated)}.` : "")),
+        c.set ? del : ""));
+    }
+    const name = el("input", { id: "new-secret-name", type: "text", autocomplete: "off", spellcheck: "false", placeholder: "MY_API_KEY", pattern: "[A-Za-z_][A-Za-z0-9_]*" });
+    const value = el("input", { id: "new-secret-value", type: "password", autocomplete: "new-password", spellcheck: "false" });
+    const msg = el("p", { class: "note", role: "status" });
+    const add = el("form", { class: "card wide" }, el("h3", {}, "Add a credential"),
+      el("p", { class: "muted" }, "For a backend whose settings refer to it as ${NAME}. Most of the time the Backends page sets these up for you."),
+      el("div", { class: "field" }, el("label", { for: "new-secret-name" }, "Name (letters, digits, underscore)"), name),
+      el("div", { class: "field" }, el("label", { for: "new-secret-value" }, "Value"), value), el("button", { type: "submit" }, "Store"), msg);
+    add.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const r2 = await act("/api/secrets/" + encodeURIComponent(name.value.trim()), { value: value.value });
+      value.value = "";
+      if (r2.ok) { await load(); } else { msg.className = "msg"; msg.textContent = r2.body.error || "Could not store it."; }
+    });
+    kids.push(add);
+    box.replaceChildren(...kids);
+  }
+  await load();
+  return box;
 }
 
 async function backendsSection() {
@@ -308,8 +482,12 @@ async function addSection(reloadList, goSettings, onAdded) {
   const out = el("div", {});
 
   function show(...kids) { out.replaceChildren(...kids); }
-  const choose = el("div", { class: "row" });
-  const pick = (label, fn) => { const b = el("button", { type: "button", class: "plain" }, label); b.addEventListener("click", fn); choose.append(b); };
+  const choose = el("div", { class: "choices" });
+  const pick = (label, fn, desc) => {
+    const b = el("button", { type: "button", class: "choice" }, el("strong", {}, label), el("span", { class: "muted" }, desc || ""));
+    b.addEventListener("click", () => { for (const x of choose.children) x.removeAttribute("aria-pressed"); b.setAttribute("aria-pressed", "true"); fn(); });
+    choose.append(b);
+  };
 
   function reviewScreen(payload, formNode, onError) {
     const msg = el("p", { class: "msg", role: "alert" });
@@ -377,7 +555,7 @@ async function addSection(reloadList, goSettings, onAdded) {
     if (!info.custom_commands) {
       const go = el("button", { type: "button", class: "plain" }, "Open settings");
       go.addEventListener("click", goSettings);
-      return el("div", { class: "card" }, el("h3", {}, "Custom command"), el("p", {}, "Custom commands are switched off. Turning them on lets whoever controls this page run programs on this computer as you, so it asks for your passphrase and a typed confirmation."), go);
+      return el("div", { class: "card" }, el("h3", {}, "Custom command"), el("p", {}, "Programs on this computer are switched off in Settings. Turning them on lets you add a backend that starts a program here; each one asks for your admin passphrase."), go);
     }
     const env = rowsEditor("Environment values. Tick “secret” for anything private.", "Variable");
     const msg = el("p", { class: "msg", role: "alert" });
@@ -391,10 +569,10 @@ async function addSection(reloadList, goSettings, onAdded) {
     return f;
   }
 
-  for (const p of info.presets) pick(p.title, () => show(presetForm(p)));
-  pick("Remote server (URL)", () => show(remoteForm()));
-  pick("Custom command", () => show(commandForm()));
-  box.append(el("h2", { id: "add" }, "Add a backend"), el("p", { class: "muted" }, "Pick what to connect. Tokens go to a write-only store, never into the config file."), choose, out);
+  for (const p of info.presets) pick(p.title, () => show(presetForm(p)), p.description);
+  pick("Remote server (URL)", () => show(remoteForm()), "Any MCP server reachable by a web address, with a token or header if it needs one.");
+  pick("Custom command", () => show(commandForm()), "Start a program on this computer, such as npx or uvx.");
+  box.append(el("h2", { id: "add" }, "Add a backend"), el("p", { class: "muted" }, "Pick what to connect. Tokens you enter go to a private store on this computer, never into the config file."), choose, out);
   return box;
 }
 
@@ -406,22 +584,14 @@ async function settingsSection(reloadAll, openGuide) {
     const guide = el("button", { type: "button", class: "plain" }, "Open the setup guide");
     guide.addEventListener("click", () => openGuide());
     const kids = [el("h2", { id: "set" }, "Settings"), el("h3", {}, "Setup guide"),
-      el("p", { class: "muted" }, "Step by step: add a first backend, test it, and connect a client."), guide, el("h3", {}, "Custom commands"),
-      el("p", {}, s.custom_commands ? "On: this page can add and enable programs that run on this computer." : "Off: this page can only add presets and remote servers.")];
-    if (s.custom_commands) {
-      const off = el("button", { type: "button", class: "plain" }, "Turn off");
-      off.addEventListener("click", async () => { const r = await act("/api/settings/custom-commands", { enabled: false }); if (r.ok) { await load(); reloadAll(); } else msg.textContent = r.body.error || "Failed."; });
-      kids.push(off);
-    } else {
-      const f = el("form", { class: "card" }, el("p", {}, "Turning this on lets whoever controls this page run programs on this computer as you. Only do it if you need a server that is not a preset."),
-        field("Type ALLOW PROGRAMS to confirm", "confirm", "text", { autocomplete: "off", spellcheck: "false" }), el("button", { type: "submit" }, "Turn on"), msg);
-      f.addEventListener("submit", async (ev) => {
-        ev.preventDefault();
-        const r = await act("/api/settings/custom-commands", { enabled: true, confirm: new FormData(f).get("confirm") });
-        if (r.ok) { await load(); reloadAll(); } else msg.textContent = r.body.error || "Failed.";
-      });
-      kids.push(f);
-    }
+      el("p", { class: "muted" }, "Step by step: add a first backend, test it, and connect a client."), guide, el("h3", {}, "Programs on this computer"),
+      el("p", {}, s.custom_commands ? "On: you can add a backend that starts a program on this computer (a custom command). Each one asks for your admin passphrase again." : "Off: only presets and remote servers can be added.")];
+    const sw = el("button", { type: "button", class: s.custom_commands ? "plain" : "" }, s.custom_commands ? "Turn off" : "Turn on");
+    sw.addEventListener("click", async () => {
+      const r = await act("/api/settings/custom-commands", { enabled: !s.custom_commands });
+      if (r.ok) { await load(); reloadAll(); } else msg.textContent = r.body.error || "Failed.";
+    });
+    kids.push(sw, msg);
     box.replaceChildren(...kids);
   }
   await load();
@@ -707,7 +877,7 @@ async function remoteSection(part = "remote") {
         st.settings.public_url ? "" : el("p", { class: "muted" }, "Remote use needs a public address first: set it on the Remote access page."))];
     if (part === "tokens") {
       box.replaceChildren(el("h2", { id: "tok", tabindex: "-1" }, "Tokens and sign-in"),
-        el("p", { class: "muted" }, "Everything an app needs to be allowed in, and how to use it."), ...explain,
+        el("p", { class: "muted" }, "What an app needs to be allowed in to mcpgate, and how to use it. (The keys mcpgate uses to reach your backends, such as a GitHub token, are on the Credentials page.)"), ...explain,
         ...[pieces.banner, pieces.pass, pieces.token, pieces.apps].filter(Boolean));
     } else {
       box.replaceChildren(el("h2", { id: "rem", tabindex: "-1" }, "Remote access"),
@@ -988,9 +1158,9 @@ async function render() {
 
 // ---- dashboard shell: a side menu and one page at a time ---------------------------------------
 const ROUTES = [
-  ["overview", "Overview"], ["backends", "Backends"], ["approvals", "Approvals"],
+  ["overview", "Overview"], ["backends", "Backends"], ["secrets", "Credentials"], ["approvals", "Approvals"],
   ["remote", "Remote access"], ["tokens", "Tokens"], ["activity", "Activity"], ["settings", "Settings"]];
-const ROUTE_OF = { bk: "#/backends", rem: "#/remote", tok: "#/tokens", set: "#/settings", ap: "#/approvals" };
+const ROUTE_OF = { bk: "#/backends", sec: "#/secrets", rem: "#/remote", tok: "#/tokens", set: "#/settings", ap: "#/approvals" };
 
 async function shell(out) {
   const approvals = await approvalsSection();
@@ -1009,6 +1179,7 @@ async function shell(out) {
       const add = await addSection(() => bk.reload(), () => { location.hash = "#/settings"; });
       return [bk, add];
     },
+    secrets: () => secretsSection(),
     approvals: async () => approvals,
     remote: () => remoteSection("remote"),
     tokens: () => remoteSection("tokens"),

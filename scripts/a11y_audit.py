@@ -53,7 +53,7 @@ def start(work, config):
     return proc, admin, code
 
 
-PAGES = [("overview", "ov"), ("backends", "bk"), ("approvals", "ap"), ("remote", "rem"), ("tokens", "tok"), ("activity", "aud"), ("settings", "set")]
+PAGES = [("overview", "ov"), ("backends", "bk"), ("secrets", "sec"), ("approvals", "ap"), ("remote", "rem"), ("tokens", "tok"), ("activity", "aud"), ("settings", "set")]
 
 
 def visit(pg, route, key):

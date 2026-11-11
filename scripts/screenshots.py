@@ -127,6 +127,14 @@ args = ["{repo}/tests/fixtures/demo_server.py"]
 description = "Notes and small utilities"
 confirm = ["create_*"]
 deny = ["wipe"]
+[backends.github]
+transport = "http"
+preset = "github"
+url = "http://127.0.0.1:9/mcp"
+description = "My repositories and issues"
+enabled = false
+[backends.github.headers]
+Authorization = "Bearer ${{GITHUB_TOKEN}}"
 '''
     (b / "mcpgate").mkdir(parents=True, mode=0o700, exist_ok=True)
     now = time.time()
@@ -145,6 +153,8 @@ from mcpgate.authstore import AuthStore
 from mcpgate.oauth import GatewayOAuth
 import asyncio, pathlib
 AuthStore().set_passphrase("oauth_passphrase", "a long sign-in passphrase")
+from mcpgate.secretstore import SecretStore
+SecretStore("{b}/mcpgate/secrets.json").set("GITHUB_TOKEN", "ghp_exampleexampleexampleexample0000")
 p = GatewayOAuth("https://my-laptop.my-tailnet.ts.net", passphrase="a long sign-in passphrase", state_path=pathlib.Path("{b}/state/mcpgate/oauth.json"))
 c = OAuthClientInformationFull(client_id="c1", client_name="Claude", redirect_uris=["https://claude.ai/api/mcp/auth_callback"], token_endpoint_auth_method="none")
 asyncio.run(p.register_client(c))
@@ -193,8 +203,16 @@ asyncio.run(main())
             card = pg.locator("article.backend").first
             card.locator(".summary").wait_for(timeout=15000)
             pg.wait_for_timeout(500)
-            shot(pg, "article.backend", "permissions", scheme)
+            shot(pg, "article.backend[data-name=demo]", "permissions", scheme)
+            pg.locator("article.backend[data-name=github]").get_by_role("button", name="Edit").click()
+            pg.locator("article.backend[data-name=github] .edit h4").first.wait_for(timeout=15000)
+            pg.wait_for_timeout(500)
+            shot(pg, "article.backend[data-name=github]", "edit", scheme)
+            pg.locator("section[aria-labelledby=add] button.choice").first.click()
+            pg.locator("section[aria-labelledby=add] form").wait_for()
             shot(pg, "section[aria-labelledby=add]", "add", scheme)
+            go("secrets", "sec")
+            shot(pg, "section[aria-labelledby=sec]", "credentials", scheme)
             go("remote", "rem")
             pg.locator("section[aria-labelledby=rem]").locator("p.note, h3").first.wait_for()
             shot(pg, "section[aria-labelledby=rem]", "remote", scheme)
