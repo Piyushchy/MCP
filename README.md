@@ -50,21 +50,27 @@ It opens once on a fresh install and can be reopened from **Settings**.
 
 ![Guided setup](docs/screenshots/wizard-light.png)
 
+The page is a dashboard with a menu on the left (a row at the top on a phone):
+
 | Page | What you do there |
 |---|---|
-| **Backends** | See each backend and whether it is reachable, with a plain-language reason and hint if not. Test, enable, disable, remove. |
-| **Add backend** | Presets, a remote URL (HTTP or SSE), or a command. Fields for environment variables, headers and secrets. |
-| **Permissions** | Per backend: which tools are visible, hidden (`deny`), or need approval (`confirm`). Pick from the real tool list instead of typing patterns. |
+| **Overview** | Where things stand (backends connected, approvals waiting, remote access, signed-in apps) and a four-step "Get started" list: register a backend, choose what Claude may do, connect claude.ai, add it in claude.ai. |
+| **Backends** | Each backend with whether it is reachable, a plain-language reason and hint if not, and Test, Enable, Disable, Remove. Open **Permissions** on a backend to set each tool to allowed, needs approval (`confirm`) or hidden (`deny`) from the real tool list. **Add a backend** is on the same page: presets, a remote URL (HTTP or SSE), or a command, with fields for environment variables, headers and secrets. |
 | **Approvals** | Pending requests for tools that need approval, showing the exact arguments. Approve once, for a while, or deny. |
-| **Remote access** | Public address, approval passphrase, access token, a connection check, setup instructions for Tailscale Funnel or Cloudflare, and the apps currently signed in (sign out one or all). |
+| **Remote access** | Public address, the sign-in switch for claude.ai, a connection check, and setup instructions for Tailscale Funnel or Cloudflare. |
+| **Tokens** | Explains the three secrets (admin passphrase, approval passphrase, access token), how to use each with claude.ai, Claude Code and other tools, and manages the approval passphrase, the access token and the signed-in apps (sign out one or all). |
 | **Activity** | The audit log with filters, paging and download. Log size and rotation are set here. |
-| **Settings** | Change the admin passphrase, sign out, reopen the guided setup, and the switch for custom command backends. |
+| **Settings** | Change the admin passphrase, reopen the guided setup, and the switch for custom command backends. |
+
+![Overview](docs/screenshots/overview-light.png)
 
 | Backends | Permissions |
 |---|---|
 | ![Backends](docs/screenshots/backends-light.png) | ![Permissions](docs/screenshots/permissions-light.png) |
 | **Approvals** | **Remote access** |
 | ![Approvals](docs/screenshots/approvals-light.png) | ![Remote access](docs/screenshots/remote-light.png) |
+
+![Tokens](docs/screenshots/tokens-light.png)
 
 All pages follow the system light or dark theme; dark versions are in [docs/screenshots](docs/screenshots). The page works with a keyboard alone, at phone width, and with reduced motion; `tests/test_a11y_browser.py` checks contrast, labels, focus outlines and overflow (set `MCPGATE_AXE` to an axe-core file to add axe).
 
@@ -224,8 +230,8 @@ claude.ai (web and phone) runs on Anthropic's servers, so it cannot start a prog
 public HTTPS address, and it logs in with OAuth. mcpgate includes a small single-owner OAuth server for this.
 (If you only use Claude Code or Claude Desktop on the same computer, skip this section: stdio needs no network.)
 
-**In the UI:** open **Remote access**, enter your public address, set an approval passphrase, tick "Let apps sign in
-with the approval passphrase", Save, then press **Check connection**. The page shows the exact `tailscale funnel`
+**In the UI:** open **Remote access**, enter your public address, tick "Let apps sign in with the approval
+passphrase", Save, then press **Check connection**. Set the approval passphrase on the **Tokens** page first. The page shows the exact `tailscale funnel`
 or Cloudflare steps for your address under "Show setup instructions".
 
 **From the terminal instead:**

@@ -106,17 +106,32 @@ try:
         pg.get_by_label("Repeat passphrase").fill(PASS)
         pg.get_by_role("button", name="Create admin passphrase").click()
         # the first-run guide opens by itself only with no backend; there is one, so the full page shows
-        pg.get_by_role("heading", name="Backends").wait_for(timeout=30000)
+        pg.locator("nav[aria-label='Main menu']").wait_for(timeout=30000)
+        go = lambda route, key: (pg.evaluate(f"location.hash = '#/{route}'"), pg.locator(f"section[aria-labelledby={key}]").wait_for(timeout=30000), pg.wait_for_timeout(500))
         calls.append(subprocess.Popen([PY, "-c", caller], env={**env, "PYTHONPATH": str(REPO)}, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+        go("approvals", "ap")
         pg.locator("article.pending").first.wait_for(timeout=40000)
+        approval_text = pg.locator("article.pending").first.inner_text()
+        texts = {"approval": approval_text}
+        other = []
+        go("backends", "bk")
         pg.get_by_role("button", name="Permissions").first.click()
         pg.wait_for_timeout(1500)
-        pg.locator("section[aria-labelledby=rem]").locator("details summary").click()
-        pg.wait_for_timeout(300)
-        for sel in ("section[aria-labelledby=aud]",):
-            pg.locator(sel).locator("details.logrow summary").first.click()
+        texts["backend_description"] = pg.locator("section[aria-labelledby=bk]").inner_text()
+        for route, key, name in (("remote", "rem", "remote"), ("tokens", "tok", "app_name")):
+            go(route, key)
+            if route == "remote":
+                pg.locator("section[aria-labelledby=rem] details summary").click()
+                pg.wait_for_timeout(300)
+            if route == "tokens":
+                texts[name] = pg.locator(f"section[aria-labelledby={key}]").inner_text()
+            else:
+                other.append(pg.locator(f"section[aria-labelledby={key}]").inner_text())
+        go("activity", "aud")
+        pg.locator("section[aria-labelledby=aud] details.logrow summary").first.click()
         pg.wait_for_timeout(500)
-        text = pg.locator("body").inner_text()
+        texts["audit"] = pg.locator("section[aria-labelledby=aud]").inner_text()
+        text = "\n".join([*texts.values(), *other])
         out = {
             "pwned": pg.evaluate("window.__pwned === undefined ? null : window.__pwned"),
             "dialogs": dialogs,
@@ -124,12 +139,7 @@ try:
             "injected_img": pg.locator("img").count(),
             "scripts": pg.locator("script").count(),
             "payload_visible_as_text": text.count("onerror=window.__pwned=1"),
-            "shown_in": {
-                "backend_description": pg.locator("section[aria-labelledby=bk]").inner_text().count("onerror=window.__pwned=1") if pg.locator("section[aria-labelledby=bk]").count() else -1,
-                "approval": pg.locator("article.pending").first.inner_text().count("onerror=window.__pwned=1"),
-                "app_name": pg.locator("section[aria-labelledby=rem]").inner_text().count("onerror=window.__pwned=1"),
-                "audit": pg.locator("section[aria-labelledby=aud]").inner_text().count("onerror=window.__pwned=1"),
-            },
+            "shown_in": {k: v.count("onerror=window.__pwned=1") for k, v in texts.items()},
             "html_has_raw_payload": "<img src=x onerror" in pg.content().replace("&lt;", "<").split("<body")[0],
         }
         # the live DOM must contain the payload only inside text nodes

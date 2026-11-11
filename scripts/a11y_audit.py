@@ -53,6 +53,15 @@ def start(work, config):
     return proc, admin, code
 
 
+PAGES = [("overview", "ov"), ("backends", "bk"), ("approvals", "ap"), ("remote", "rem"), ("tokens", "tok"), ("activity", "aud"), ("settings", "set")]
+
+
+def visit(pg, route, key):
+    pg.evaluate(f"location.hash = '#/{route}'")
+    pg.locator(f"section[aria-labelledby={key}]").wait_for()
+    pg.wait_for_timeout(300)
+
+
 def check(page, label):
     unlabeled = page.evaluate("""() => [...document.querySelectorAll('input:not([type=hidden]),select,textarea')].filter(e => e.offsetParent !== null
         && !(e.labels && e.labels.length) && !e.getAttribute('aria-label') && !e.getAttribute('aria-labelledby')).map(e => e.name || e.id || e.type).slice(0, 5)""")
@@ -122,11 +131,15 @@ with tempfile.TemporaryDirectory() as tmp, sync_playwright() as p:
                         check(pg, label + "/signin")
                         pg.get_by_label("Passphrase").fill(PASS)
                         pg.get_by_role("button", name="Sign in").click()
-                    pg.locator("section[aria-labelledby=bk]").wait_for()
-                    if name == "demo":
-                        pg.locator("article.backend").first.wait_for()
-                    pg.wait_for_timeout(1500)
-                    check(pg, label + "/main")
+                    pg.locator("nav[aria-label='Main menu']").wait_for()
+                    for route, key in PAGES:
+                        visit(pg, route, key)
+                        if name == "demo" and route == "backends":
+                            pg.locator("article.backend").first.wait_for()
+                            pg.wait_for_timeout(1500)
+                        if route == "remote":
+                            pg.wait_for_timeout(500)
+                        check(pg, f"{label}/{route}")
                     ctx.close()
         finally:
             proc.terminate()
@@ -162,7 +175,10 @@ with tempfile.TemporaryDirectory() as tmp, sync_playwright() as p:
         pg.get_by_label("New passphrase (12+ characters)").fill(PASS)
         pg.get_by_label("Repeat passphrase").fill(PASS)
         pg.get_by_role("button", name="Create admin passphrase").click()
-        pg.locator("section[aria-labelledby=bk]").wait_for()
+        pg.locator("section[aria-labelledby=ov]").wait_for()
+        if "Register a backend" not in pg.locator("section[aria-labelledby=ov]").inner_text():
+            problems.append("the overview does not say what to do first")
+        visit(pg, "backends", "bk")
         if "No backends yet. Add one" not in pg.locator("section[aria-labelledby=bk]").inner_text():
             problems.append("empty state does not say what to do next")
         pg.wait_for_timeout(1500)  # let the page finish drawing before the session is cut
@@ -194,7 +210,7 @@ with tempfile.TemporaryDirectory() as tmp, sync_playwright() as p:
         pg.keyboard.type(PASS)
         pg.keyboard.press("Enter")
         try:
-            pg.locator("section[aria-labelledby=bk]").wait_for(timeout=5000)
+            pg.locator("section[aria-labelledby=ov]").wait_for(timeout=5000)
         except Exception:
             problems.append("keyboard-only sign-in did not work")
         ctx.close()

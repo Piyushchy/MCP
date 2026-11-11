@@ -52,6 +52,8 @@ function form(title, intro, fields, button, onSubmit) {
   return f;
 }
 
+let viewTitle = "mcpgate admin";
+
 function page(...kids) {
   root.replaceChildren(el("h1", {}, "mcpgate admin"), ...kids);
 }
@@ -429,9 +431,38 @@ async function settingsSection(reloadAll, openGuide) {
 // ---- approvals inbox ----------------------------------------------------------------------------
 let pollTimer = null;
 
+async function overviewSection(approvals) {
+  const box = el("section", { "aria-labelledby": "ov" }, el("h2", { id: "ov", tabindex: "-1" }, "Overview"));
+  const [bk, rm] = await Promise.all([api("/api/backends"), api("/api/remote")]);
+  const list = bk.ok ? bk.body.backends : [];
+  const up = list.filter((b) => b.state === "connected").length;
+  const bad = list.filter((b) => b.state === "error").length;
+  const r = rm.ok ? rm.body : null;
+  const remoteReady = !!(r && r.settings.public_url && r.settings.oauth_enabled && r.passphrase.set);
+  const remoteText = remoteReady ? "On" : (r && r.settings.public_url ? "Needs a passphrase" : "Off");
+  const apps = r ? r.clients.length : 0;
+  const tile = (href, label, value, hint) => el("a", { class: "tile", href }, el("span", { class: "tile-label" }, label), el("strong", { class: "tile-value" }, value), el("span", { class: "muted small" }, hint));
+  box.append(el("p", { class: "muted" }, "Your gateway gives Claude one door to all your backends. This page shows where things stand and what to do next."),
+    el("div", { class: "tiles" },
+      tile("#/backends", "Backends", `${up} of ${list.length} connected`, bad ? `${bad} with a problem` : "Add or change them"),
+      tile("#/approvals", "Waiting for you", String(approvals.count || 0), "Calls that need your approval"),
+      tile("#/remote", "Remote access", remoteText, "For claude.ai from anywhere"),
+      tile("#/tokens", "Signed-in apps", String(apps), "Tokens and passphrases")));
+  const step = (done, title, body, href, action) => el("li", { class: done ? "step done" : "step" },
+    el("div", {}, el("strong", {}, (done ? "Done: " : "") + title), el("p", { class: "muted" }, body)),
+    el("a", { class: "button", href }, action));
+  box.append(el("h3", {}, "Get started"), el("ol", { class: "steps" },
+    step(list.length > 0, "Register a backend", "A backend is a tool server such as GitHub or Google Colab. Pick a preset, paste its token, and test it.", "#/backends", list.length ? "Add another" : "Add a backend"),
+    step(false, "Choose what Claude may do", "Open a backend and set each tool to allowed, needs approval, or hidden. Deleting and writing tools are good ones to ask about.", "#/backends", "Open backends"),
+    step(remoteReady, "Connect claude.ai", "Add your public address, set an approval passphrase, and check the connection.", "#/remote", "Set up remote access"),
+    step(apps > 0, "Add it in claude.ai", "Add a custom connector with your address, then sign in with the approval passphrase. Usage and tokens are explained on the Tokens page.", "#/tokens", "How to connect")));
+  box.append(el("h3", {}, "On this computer"), el("p", { class: "muted" }, "Claude Code and Claude Desktop on this machine need no tunnel or token:"), codeBlock("claude mcp add mcpgate -- mcpgate serve"));
+  return box;
+}
+
 async function approvalsSection() {
   const box = el("section", { id: "approvals", "aria-labelledby": "ap" });
-  const badge = el("a", { href: "#approvals", class: "badge", "aria-label": "Approvals waiting" }, "Approvals: 0");
+  const badge = el("a", { href: "#/approvals", class: "badge", "aria-label": "Approvals waiting" }, "Approvals: 0");
   const live = el("p", { class: "sr", "aria-live": "polite" });
   let sig = "";
   let lastCount = 0;
@@ -484,7 +515,7 @@ async function approvalsSection() {
     }
     badge.textContent = `Approvals: ${d.count}`;
     badge.classList.toggle("alert", d.count > 0);
-    document.title = (d.count ? `(${d.count}) ` : "") + "mcpgate admin";
+    document.title = (d.count ? `(${d.count}) ` : "") + viewTitle + " · mcpgate admin";
     if (d.count > lastCount) live.textContent = `${d.count} approval${d.count > 1 ? "s" : ""} waiting`;
     lastCount = d.count;
   }
@@ -492,6 +523,7 @@ async function approvalsSection() {
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(() => { if (!document.hidden) refresh(); }, 3000);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+  Object.defineProperty(box, "count", { get: () => lastCount });
   box.badge = badge;
   box.live = live;
   return box;
@@ -520,8 +552,8 @@ function ago(ts) {
   return Math.round(m / 1440) + " days ago";
 }
 
-async function remoteSection() {
-  const box = el("section", { "aria-labelledby": "rem" });
+async function remoteSection(part = "remote") {
+  const box = el("section", { "aria-labelledby": part === "tokens" ? "tok" : "rem" });
   let token = "";          // shown once, then dropped
   let checkResult = null;
   const notes = {};
@@ -530,8 +562,7 @@ async function remoteSection() {
     const refresh = async () => { await load(); };
     const say = (key, text, bad) => { notes[key] = { text, bad }; };
     const note = (key) => { const n = notes[key]; return el("p", { class: n && n.bad ? "msg" : "note", role: n && n.bad ? "alert" : "status" }, n ? n.text : ""); };
-    const kids = [el("h2", { id: "rem" }, "Remote access"),
-      el("p", { class: "muted" }, "Lets claude.ai and other apps outside this computer reach your gateway through a tunnel. This admin page itself is never exposed.")];
+    const pieces = {};
 
     if (st.restart.required) {
       const b = el("button", { type: "button" }, "Restart now");
@@ -540,7 +571,7 @@ async function remoteSection() {
         say("restart", r.ok ? "Restarting. This page reconnects in a few seconds; reload it if it does not." : (r.body.error || "Could not restart. Run mcpgate service status to see why."), !r.ok);
         await refresh();
       });
-      kids.push(el("div", { class: "banner", role: "status" }, el("p", {}, "Saved changes will apply after the service restarts." +
+      pieces.banner = (el("div", { class: "banner", role: "status" }, el("p", {}, "Saved changes will apply after the service restarts." +
         (st.restart.supervised ? "" : " It is not running under a service manager, so stop it with Ctrl+C and start it again yourself.")),
         st.restart.supervised ? b : "", note("restart")));
     }
@@ -565,7 +596,7 @@ async function remoteSection() {
       say("settings", r.ok ? "Saved." : (r.body.error || "Could not save. Check the values and try again."), !r.ok);
       await refresh();
     });
-    kids.push(sf);
+    pieces.address = sf;
 
     // approval passphrase
     const pw = el("input", { id: "r-pw", name: "passphrase", type: "password", autocomplete: "new-password", minlength: "12", required: "" });
@@ -584,7 +615,7 @@ async function remoteSection() {
       say("pass", r.ok ? "Passphrase saved." : (r.body.error || "Could not save. Check the values and try again."), !r.ok);
       await refresh();
     });
-    kids.push(pf);
+    pieces.pass = pf;
 
     // access token
     const tk = [el("h3", {}, "Access token"),
@@ -606,7 +637,7 @@ async function remoteSection() {
       tk.push(rm);
     }
     tk.push(note("token"));
-    kids.push(el("div", { class: "card" }, ...tk));
+    pieces.token = el("div", { class: "card" }, ...tk);
 
     // connection check
     const chk = el("button", { type: "button" }, "Check connection");
@@ -625,8 +656,8 @@ async function remoteSection() {
           el("strong", {}, (c.ok === true ? "OK: " : c.ok === false ? "Problem: " : "Note: ") + c.name), " " + c.detail, c.advice ? el("div", { class: "muted" }, c.advice) : ""));
       }
     }
-    kids.push(el("div", { class: "card" }, el("h3", {}, "Connection check"),
-      el("p", { class: "muted" }, "Contacts your saved public address from here and reports what an outside app would see."), chk, note("check"), list));
+    pieces.check = el("div", { class: "card" }, el("h3", {}, "Connection check"),
+      el("p", { class: "muted" }, "Contacts your saved public address from here and reports what an outside app would see."), chk, note("check"), list);
 
     // instructions
     const ins = st.instructions;
@@ -637,7 +668,7 @@ async function remoteSection() {
       for (const c of g.commands) how.push(codeBlock(c));
     }
     how.push(el("h4", {}, "In claude.ai"), el("ol", {}, ...ins.claude.map((t) => el("li", {}, t))));
-    kids.push(el("details", { class: "card" }, el("summary", {}, "Show setup instructions"), ...how));
+    pieces.how = el("details", { class: "card" }, el("summary", {}, "Show setup instructions"), ...how);
 
     // signed-in apps
     const apps = [el("h3", {}, "Signed-in apps")];
@@ -659,8 +690,30 @@ async function remoteSection() {
       all.addEventListener("click", async () => { if (!window.confirm("Sign every app out? Each one has to be approved again.")) return; await act("/api/remote/signout-all"); await refresh(); });
       apps.push(all);
     }
-    kids.push(el("div", { class: "card" }, ...apps));
-    box.replaceChildren(...kids);
+    pieces.apps = el("div", { class: "card" }, ...apps);
+
+    const url0 = st.settings.public_url ? st.instructions.connector_url : "https://YOUR-ADDRESS/mcp";
+    const explain = [
+      el("div", { class: "card wide" }, el("h3", {}, "Which secret is which?"),
+        el("dl", { class: "defs" },
+          el("dt", {}, "Admin passphrase"), el("dd", {}, "Signs you in to this admin page. It never leaves this computer. Change it in Settings."),
+          el("dt", {}, "Approval passphrase"), el("dd", {}, "What you type on the sign-in page that claude.ai (or another app that supports sign-in) opens when you add the connector. The app never sees it."),
+          el("dt", {}, "Access token"), el("dd", {}, "A long random string for tools that cannot do the sign-in step. The tool sends it with every request. It is shown once when you create it and stored only as a hash."))),
+      el("div", { class: "card wide" }, el("h3", {}, "How to use them"),
+        el("p", {}, el("strong", {}, "claude.ai or the Claude app. "), "Add a custom connector with this address, then type the approval passphrase when asked:"), codeBlock(url0),
+        el("p", {}, el("strong", {}, "Claude Code on another computer, with a token:")), codeBlock(`claude mcp add --transport http mcpgate ${url0} --header "Authorization: Bearer YOUR_TOKEN"`),
+        el("p", {}, el("strong", {}, "Any other tool. "), "Send the header ", el("code", {}, "Authorization: Bearer YOUR_TOKEN"), " to that address."),
+        el("p", {}, el("strong", {}, "On this computer "), "you need no token and no tunnel:"), codeBlock("claude mcp add mcpgate -- mcpgate serve"),
+        st.settings.public_url ? "" : el("p", { class: "muted" }, "Remote use needs a public address first: set it on the Remote access page."))];
+    if (part === "tokens") {
+      box.replaceChildren(el("h2", { id: "tok", tabindex: "-1" }, "Tokens and sign-in"),
+        el("p", { class: "muted" }, "Everything an app needs to be allowed in, and how to use it."), ...explain,
+        ...[pieces.banner, pieces.pass, pieces.token, pieces.apps].filter(Boolean));
+    } else {
+      box.replaceChildren(el("h2", { id: "rem", tabindex: "-1" }, "Remote access"),
+        el("p", { class: "muted" }, "Lets claude.ai and other apps outside this computer reach your gateway through a tunnel. This admin page itself is never exposed. Passphrases and tokens are on the Tokens page."),
+        ...[pieces.banner, pieces.address, pieces.check, pieces.how].filter(Boolean));
+    }
   }
   await load();
   return box;
@@ -919,27 +972,77 @@ async function render() {
   } else if (s.state === "login") {
     page(form("Sign in", "", [field("Admin passphrase", "passphrase")], "Sign in", async (v) => after(await api("/api/login", "POST", { passphrase: v.passphrase }))));
   } else {
-    const out = el("button", { type: "button" }, "Sign out");
-    out.addEventListener("click", async () => { await api("/api/logout", "POST", {}); csrf = ""; document.title = "mcpgate admin"; await render(); });
+    const out = el("button", { type: "button", class: "plain" }, "Sign out");
+    out.addEventListener("click", async () => { await api("/api/logout", "POST", {}); csrf = ""; viewTitle = "mcpgate admin"; document.title = "mcpgate admin"; location.hash = ""; await render(); });
     const { body: wz } = await api("/api/wizard");
     if (wizardAuto && !wz.done && !wz.has_backend) wizardOpen = true;
     wizardAuto = false;
     if (wizardOpen) {
-      const closeWizard = async (scrollTo) => { wizardOpen = false; await render(); if (scrollTo) { const t = root.querySelector(`section[aria-labelledby=${scrollTo}]`); if (t) t.scrollIntoView(); } };
+      const closeWizard = async (scrollTo) => { wizardOpen = false; if (scrollTo) location.hash = ROUTE_OF[scrollTo] || ""; await render(); };
       page(el("p", {}, "You are signed in."), out, await wizardSection(closeWizard));
       return;
     }
-    const approvals = await approvalsSection();
-    const bk = await backendsSection();
-    const remote = await remoteSection();
-    const audit = await auditSection();
-    const settings = await settingsSection(() => render(), () => { wizardOpen = true; render(); });
-    const add = await addSection(() => bk.reload(), () => settings.scrollIntoView());
-    page(el("p", {}, "You are signed in."), out, approvals, bk, add, remote, audit, settings,
-      form("Change passphrase", "", [field("Current passphrase", "current"), field("New passphrase (12+ characters)", "new", "password", { minlength: "12" })], "Change",
-        async (v) => after(await api("/api/passphrase", "POST", { current: v.current, new: v.new }))));
-    root.querySelector("h1").after(approvals.badge, approvals.live);
+    await shell(out);
   }
 }
+
+// ---- dashboard shell: a side menu and one page at a time ---------------------------------------
+const ROUTES = [
+  ["overview", "Overview"], ["backends", "Backends"], ["approvals", "Approvals"],
+  ["remote", "Remote access"], ["tokens", "Tokens"], ["activity", "Activity"], ["settings", "Settings"]];
+const ROUTE_OF = { bk: "#/backends", rem: "#/remote", tok: "#/tokens", set: "#/settings", ap: "#/approvals" };
+
+async function shell(out) {
+  const approvals = await approvalsSection();
+  const links = ROUTES.map(([key, label]) => el("li", {}, el("a", { href: "#/" + key, "data-route": key }, label)));
+  const nav = el("nav", { "aria-label": "Main menu" }, el("ul", {}, ...links));
+  const view = el("div", { class: "view" });
+  const side = el("div", { class: "side" }, nav, el("div", { class: "who" }, approvals.badge, approvals.live, out));
+  const frame = el("div", { class: "shell" }, side, view);
+  root.replaceChildren(el("h1", {}, "mcpgate admin"), frame);
+
+  let current = 0;
+  const builders = {
+    overview: () => overviewSection(approvals),
+    backends: async () => {
+      const bk = await backendsSection();
+      const add = await addSection(() => bk.reload(), () => { location.hash = "#/settings"; });
+      return [bk, add];
+    },
+    approvals: async () => approvals,
+    remote: () => remoteSection("remote"),
+    tokens: () => remoteSection("tokens"),
+    activity: () => auditSection(),
+    settings: async () => {
+      const settings = await settingsSection(() => render(), () => { wizardOpen = true; render(); });
+      return [settings, form("Change passphrase", "", [field("Current passphrase", "current"), field("New passphrase (12+ characters)", "new", "password", { minlength: "12" })], "Change",
+        async (v) => after(await api("/api/passphrase", "POST", { current: v.current, new: v.new })))];
+    },
+  };
+  async function show() {
+    const key = (location.hash.match(/^#\/([a-z]+)/) || [])[1];
+    const name = builders[key] ? key : "overview";
+    const mine = ++current;
+    for (const a of nav.querySelectorAll("a")) { if (a.dataset.route === name) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current"); }
+    viewTitle = ROUTES.find(([k]) => k === name)[1];
+    document.title = viewTitle + " · mcpgate admin";
+    view.setAttribute("aria-busy", "true");
+    let built;
+    try { built = await builders[name](); } catch (e) { built = el("p", { class: "msg", role: "alert" }, "Could not load this page. Reload it, or run mcpgate doctor."); }
+    if (mine !== current) return;  // the person moved on while this was loading
+    view.replaceChildren(...[].concat(built));
+    view.removeAttribute("aria-busy");
+    const h = view.querySelector("h2");
+    if (h) { h.setAttribute("tabindex", "-1"); if (shown) h.focus({ preventScroll: true }); }
+    shown = true;
+    window.scrollTo(0, 0);
+  }
+  let shown = false;
+  if (routeListener) window.removeEventListener("hashchange", routeListener);
+  routeListener = () => show();
+  window.addEventListener("hashchange", routeListener);
+  await show();
+}
+let routeListener = null;
 
 render().catch(() => page(el("p", {}, "The admin service is not reachable.")));

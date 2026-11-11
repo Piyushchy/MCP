@@ -85,3 +85,33 @@ button.danger:hover:not(:disabled) { background: color-mix(in srgb, currentColor
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
 main, .card, article, li, p, h2, h3, summary { overflow-wrap: anywhere; }
 pre.code { overflow-x: auto; max-width: 100%; }
+
+.shell { display: grid; grid-template-columns: 13rem minmax(0, 1fr); gap: 1.5rem; align-items: start; }
+.side { position: sticky; top: 1rem; }
+nav ul { list-style: none; margin: 0; padding: 0; display: grid; gap: .25rem; }
+nav a { display: block; padding: .5rem .75rem; border-radius: 6px; color: var(--fg); text-decoration: none; }
+nav a:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); }
+nav a[aria-current="page"] { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--fg); font-weight: 600; box-shadow: inset 4px 0 0 var(--accent); }
+.who { margin-top: 1rem; display: grid; gap: .5rem; justify-items: start; }
+.view h2 { margin-top: 0; }
+.view[aria-busy="true"] { opacity: .6; }
+.card.wide { max-width: 44rem; }
+.defs { margin: 0; } .defs dt { font-weight: 600; margin-top: .5rem; } .defs dd { margin: 0; color: var(--muted); }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: .75rem; margin: 1rem 0; }
+.tile { display: grid; gap: .15rem; border: 1px solid var(--line); border-radius: 8px; padding: .75rem 1rem; color: var(--fg); text-decoration: none; }
+.tile:hover { border-color: var(--accent); }
+.tile-label { color: var(--muted); font-size: .85rem; } .tile-value { font-size: 1.15rem; }
+.steps { list-style: none; padding: 0; margin: .5rem 0 1rem; display: grid; gap: .75rem; max-width: 44rem; }
+.step { display: flex; gap: 1rem; justify-content: space-between; align-items: center; border: 1px solid var(--line); border-radius: 8px; padding: .75rem 1rem; }
+.step p { margin: .15rem 0 0; }
+.step.done { border-color: #2e7d32; }
+a.button { display: inline-block; padding: .5rem 1rem; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: #fff; text-decoration: none; white-space: nowrap; }
+@media (prefers-color-scheme: dark) { a.button { color: #0b1220; } .step.done { border-color: #81c784; } }
+@media (max-width: 48rem) {
+  .shell { grid-template-columns: minmax(0, 1fr); gap: 1rem; }
+  .side { position: static; }
+  nav ul { grid-auto-flow: column; grid-auto-columns: max-content; overflow-x: auto; padding-bottom: .25rem; }
+  .step { flex-direction: column; align-items: stretch; }
+}
+.side, .view { min-width: 0; }
+nav { max-width: 100%; }
