@@ -88,12 +88,12 @@ async def test_colab_preset_runs_a_program_so_needs_stepup(tmp_path):
     async with rig(tmp_path, {}) as r:
         body = {"kind": "preset", "preset": "colab", "confirm": True}
         view = (await r.post("/api/backends/preview", body)).json()
-        assert view["target"] == "uvx git+https://github.com/googlecolab/colab-mcp" and view["runs_program"] is True
+        assert view["target"] == "mcpgate bridge colab" and view["runs_program"] is True
         resp = await r.post("/api/backends/add", body)
         assert resp.status_code == 403 and resp.json()["stepup"] is True and "colab" not in r.hub.backends
         await r.stepup()
         assert (await r.post("/api/backends/add", body)).status_code == 200
-        assert r.hub.backends["colab"].cfg.command == "uvx" and r.hub.backends["colab"].cfg.start_timeout == 120
+        assert r.hub.backends["colab"].cfg.command == "mcpgate" and r.hub.backends["colab"].cfg.start_timeout == 120
 
 
 async def test_unknown_preset_and_kind(tmp_path):

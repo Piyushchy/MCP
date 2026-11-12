@@ -242,6 +242,16 @@ def cmd_ui_code(args) -> int:
     return 0
 
 
+def cmd_bridge(args) -> int:
+    from . import colab
+    if args.what != "colab":
+        raise ConfigError("the only bridge is: colab")
+    try:
+        return colab.run()
+    except FileNotFoundError as e:
+        raise ConfigError(str(e)) from None
+
+
 def cmd_service(args) -> int:
     from . import service
     try:
@@ -558,6 +568,9 @@ def parser() -> argparse.ArgumentParser:
     au = sub.add_parser("auth", help="set the approval passphrase / static token (stored only as hashes)")
     au.add_argument("action", choices=["status", "passphrase", "token", "clear-passphrase", "clear-token", "clear-admin"])
     au.set_defaults(fn=cmd_auth)
+    br = sub.add_parser("bridge", help="run a helper that a backend needs (used by the Colab backend; you rarely run it yourself)")
+    br.add_argument("what", choices=["colab"])
+    br.set_defaults(fn=cmd_bridge)
     sub.add_parser("ui-code", help="print a one-time code to set the admin UI passphrase on first run").set_defaults(fn=cmd_ui_code)
     sub.add_parser("token", help="print a new random bearer token").set_defaults(fn=cmd_token)
     k = sub.add_parser("skill", help="show or install the 'mcp-gateway' skill that teaches a model to use the gateway efficiently")

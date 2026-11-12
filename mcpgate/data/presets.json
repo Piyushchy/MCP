@@ -8,23 +8,32 @@
       "backend": {
         "transport": "http",
         "url": "https://api.githubcopilot.com/mcp/",
-        "headers": {"Authorization": "Bearer ${GITHUB_TOKEN}"},
+        "headers": {
+          "Authorization": "Bearer ${GITHUB_TOKEN}"
+        },
         "description": "GitHub: repositories, issues, pull requests"
       },
       "fields": [
-        {"id": "token", "label": "GitHub personal access token", "secret": "GITHUB_TOKEN",
-         "help": "Create one at github.com/settings/tokens and give it only the access you need. It is stored write-only and never shown again."}
+        {
+          "id": "token",
+          "label": "GitHub personal access token",
+          "secret": "GITHUB_TOKEN",
+          "help": "Create one at github.com/settings/tokens and give it only the access you need. It is stored write-only and never shown again."
+        }
       ]
     },
     {
       "id": "colab",
       "title": "Google Colab",
-      "description": "Google's Colab MCP server. It runs on this computer through uvx, which downloads it the first time.",
+      "description": "Google's Colab MCP server, run by mcpgate itself (it needs uv; colab-mcp is downloaded and cached the first time it is used). Works even when your browser is on a different computer: the connect tool gives Claude a link and the one SSH command you need.",
       "name": "colab",
       "backend": {
         "transport": "stdio",
-        "command": "uvx",
-        "args": ["git+https://github.com/googlecolab/colab-mcp"],
+        "command": "mcpgate",
+        "args": [
+          "bridge",
+          "colab"
+        ],
         "start_timeout": 120,
         "description": "Google Colab notebooks"
       },

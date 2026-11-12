@@ -114,7 +114,7 @@ The UI does the same as these commands.
 export GITHUB_TOKEN=...      # or store it in the UI, or: mcpgate secret set GITHUB_TOKEN
 mcpgate add github --url https://api.githubcopilot.com/mcp/ \
     --header 'Authorization=Bearer ${GITHUB_TOKEN}' --deny 'delete_*'
-mcpgate add colab --start-timeout 120 -- uvx git+https://github.com/googlecolab/colab-mcp
+mcpgate add colab --start-timeout 120 -- mcpgate bridge colab      # or use the Google Colab preset in the admin UI
 
 mcpgate doctor          # config, commands, environment, file permissions and live connections
 mcpgate tools github    # the tools the model can find; use it to pick names for --confirm / --deny
@@ -211,24 +211,24 @@ own process under the name of the file, so a crash or bad import cannot take the
 the file is executed to discover it; the first docstring line is its description. A file starting with `_`
 is ignored, which is how you switch one off. An entry in `config.toml` with the same name wins over a file.
 
-## Colab when mcpgate runs on another computer
+## Colab
 
-Google's colab-mcp works by having the Colab page **in your browser** connect to a WebSocket on `localhost` of the
-computer that runs colab-mcp. If mcpgate runs on a server (or you reach your PC over SSH, or use claude.ai from
-elsewhere), your browser and colab-mcp are on different computers, so the connect tool just times out. This is not a
-bug in mcpgate; the plain `uvx` command only works when browser and mcpgate share one computer.
+Add the **Google Colab** preset (or `mcpgate add colab -- mcpgate bridge colab`). mcpgate runs Google's colab-mcp itself
+through `uvx`, which keeps it in its own cache: nothing to install by hand, no environment of yours to maintain, it
+survives restarts, and it only starts the first time something uses it.
 
-For the remote case use `examples/colab_mcp_remote.py`. It fixes the port (8799) and token and writes the connect
-link to `~/.local/state/mcpgate/colab-connect-url.txt` instead of opening a browser:
+colab-mcp needs the Colab page **in your browser** to connect to the computer that runs it, so a server needs one extra
+step. The connect tool does the explaining: ask Claude to run `colab.open_colab_browser_connection`, and if you are not
+connected it replies with a link and the one command to run on the computer where your browser is:
 
 ```bash
-python -m venv ~/colab-venv && ~/colab-venv/bin/pip install git+https://github.com/googlecolab/colab-mcp
-mcpgate add colab --start-timeout 120 -- ~/colab-venv/bin/python /path/to/colab_mcp_remote.py
+ssh -L 8799:127.0.0.1:8799 you@the-server      # once, keep it open
 ```
 
-Then, on the computer where your browser is: `ssh -L 8799:127.0.0.1:8799 you@the-server`, ask Claude to run
-`colab.open_colab_browser_connection`, open the link from that file in the same browser, and keep the tab open.
-Tested here with a simulated Colab tab (connect, list the notebook tools, add a cell); not against a real Colab page.
+Open the link in that browser (signed in to Google), keep the tab open, and ask Claude again. The port (8799,
+`COLAB_MCP_PORT`) and the token are fixed and kept in `~/.local/state/mcpgate/` (token mode 600), so the link does
+not change after a restart. Set `MCPGATE_COLAB_SOURCE` to pin a colab-mcp version. Tested end to end with a simulated Colab tab
+(connect, list the notebook tools, add a cell); not against a real Colab page.
 
 ## Backends that need an account, not a token
 
