@@ -211,6 +211,25 @@ own process under the name of the file, so a crash or bad import cannot take the
 the file is executed to discover it; the first docstring line is its description. A file starting with `_`
 is ignored, which is how you switch one off. An entry in `config.toml` with the same name wins over a file.
 
+## Colab when mcpgate runs on another computer
+
+Google's colab-mcp works by having the Colab page **in your browser** connect to a WebSocket on `localhost` of the
+computer that runs colab-mcp. If mcpgate runs on a server (or you reach your PC over SSH, or use claude.ai from
+elsewhere), your browser and colab-mcp are on different computers, so the connect tool just times out. This is not a
+bug in mcpgate; the plain `uvx` command only works when browser and mcpgate share one computer.
+
+For the remote case use `examples/colab_mcp_remote.py`. It fixes the port (8799) and token and writes the connect
+link to `~/.local/state/mcpgate/colab-connect-url.txt` instead of opening a browser:
+
+```bash
+python -m venv ~/colab-venv && ~/colab-venv/bin/pip install git+https://github.com/googlecolab/colab-mcp
+mcpgate add colab --start-timeout 120 -- ~/colab-venv/bin/python /path/to/colab_mcp_remote.py
+```
+
+Then, on the computer where your browser is: `ssh -L 8799:127.0.0.1:8799 you@the-server`, ask Claude to run
+`colab.open_colab_browser_connection`, open the link from that file in the same browser, and keep the tab open.
+Tested here with a simulated Colab tab (connect, list the notebook tools, add a cell); not against a real Colab page.
+
 ## Backends that need an account, not a token
 
 Some servers (Notion, Linear and others) have no token to paste: they send you to their own page to log in. Add a
