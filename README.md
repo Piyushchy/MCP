@@ -213,6 +213,18 @@ own process under the name of the file, so a crash or bad import cannot take the
 the file is executed to discover it; the first docstring line is its description. A file starting with `_`
 is ignored, which is how you switch one off. An entry in `config.toml` with the same name wins over a file.
 
+## One address for the site and the gateway
+
+A DNS record can only point a name at one place, so the project site (GitHub Pages) and your gateway (your computer,
+through a tunnel) cannot share a name by DNS alone. A free Cloudflare Worker can: it answers at one address, sends
+`/mcp` and the sign-in paths to your gateway, and shows the GitHub Pages site for everything else.
+`deploy/cloudflare/worker.js` is that Worker (about twenty lines). Create a free Cloudflare account, open
+Workers & Pages, create a Worker, paste the file (set `GATEWAY` to your Funnel address), deploy, and you get
+`https://NAME.SUBDOMAIN.workers.dev`. Then set that as the **Public address** on the Remote access page, keep the
+tunnel as it is, and use `https://NAME.SUBDOMAIN.workers.dev/mcp` in your AI app. A custom domain on the Worker needs a
+domain you own on Cloudflare; an is-a.dev name cannot be attached to it, but a `URL` record can redirect a browser to it.
+Not tested against a live Cloudflare account.
+
 ## Colab
 
 Add the **Google Colab** preset (or `mcpgate add colab -- mcpgate bridge colab`). mcpgate runs Google's colab-mcp itself
