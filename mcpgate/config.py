@@ -68,13 +68,14 @@ class Backend:
     start_timeout: float = 30.0      # seconds to wait for the server to start (first runs of npx/uvx download packages)
     description: str = ""
     source: str = "config"  # "config" or "custom" (a drop-in file)
+    auth: str = ""          # "oauth": the server asks the owner to sign in (no token to paste); see backend_oauth.py
     preset: str = ""        # id of the shipped preset this backend was made from ("" = hand-written or custom command)
 
     def connection_key(self) -> tuple:
         """Everything that decides how the server is started or reached. If this is unchanged, a reload
         keeps the running connection; policy, description and call timeout can change without a restart."""
         return (self.transport, self.command, tuple(self.args), tuple(sorted(self.env.items())), self.cwd,
-                self.url, tuple(sorted(self.headers.items())), self.enabled, self.start_timeout)
+                self.url, tuple(sorted(self.headers.items())), self.enabled, self.start_timeout, self.auth)
 
     def secret_refs(self) -> set[str]:
         """Names this backend references as ${NAME} anywhere in its settings."""
@@ -96,6 +97,10 @@ class Backend:
                 raise ConfigError(f"[{self.name}] a {self.transport} backend needs an http(s) 'url'")
         if self.timeout <= 0 or self.start_timeout <= 0:
             raise ConfigError(f"[{self.name}] timeout and start_timeout must be positive")
+        if self.auth not in ("", "oauth"):
+            raise ConfigError(f"[{self.name}] auth must be \"oauth\" or left out")
+        if self.auth and self.transport == "stdio":
+            raise ConfigError(f"[{self.name}] only a remote (http or sse) backend can use sign-in")
 
     def to_dict(self) -> dict:
         d: dict = {"transport": self.transport}
@@ -111,6 +116,8 @@ class Backend:
             d["url"] = self.url
             if self.headers:
                 d["headers"] = dict(self.headers)
+            if self.auth:
+                d["auth"] = self.auth
         if self.allow != ["*"]:
             d["allow"] = list(self.allow)
         if self.deny:
@@ -206,7 +213,7 @@ _GATEWAY_KEYS = {"cache_ttl", "tools_ttl", "max_result_chars", "audit_log", "aud
 _SERVER_KEYS = {"public_url", "port", "admin_port", "allow_hosts", "oauth_enabled", "oauth_redirect_hosts", "static_token_enabled",
                 "allow_custom_commands", "wizard_done"}
 _BACKEND_KEYS = {"transport", "command", "args", "env", "cwd", "url", "headers", "allow", "deny",
-                 "confirm", "enabled", "timeout", "start_timeout", "description", "preset"}
+                 "confirm", "enabled", "timeout", "start_timeout", "description", "preset", "auth"}
 
 
 def _strlist(name: str, key: str, v) -> list[str]:

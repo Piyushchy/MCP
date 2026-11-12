@@ -22,6 +22,9 @@ from tests.admin_helpers import DEMO, HOST, PASS, PORT, demo, rig
 CANARY = "canary-s3cr3t-9d41c7e0"
 EVIL = "<img src=x onerror=alert(1)><script>alert(2)</script>\"'`"
 PUBLIC_GETS = {"/", "/static/app.js", "/static/app.css", "/api/health", "/api/session"}
+# Reached by the browser coming back from another site's login page, so it has no session cookie to rely on. It is
+# authenticated by the one-time `state` of a sign-in this admin session started, and refuses anything else with 400.
+STATE_AUTH_GETS = {"/oauth/callback"}
 STATIC = Path(admin.__file__).parent / "static"
 
 
@@ -53,7 +56,7 @@ async def test_route_table_has_no_unprotected_route_and_no_route_outside_it(tmp_
             if s.state_changing:
                 assert s.path in admin.PRE_AUTH or (s.session and s.csrf), f"POST {s.path} needs a session and CSRF"
             else:
-                assert s.session or s.path in PUBLIC_GETS, f"GET {s.path} is open to anyone; add it to PUBLIC_GETS only if that is intended"
+                assert s.session or s.path in PUBLIC_GETS | STATE_AUTH_GETS, f"GET {s.path} is open to anyone; add it to PUBLIC_GETS only if that is intended"
         # nothing is mounted that the table does not know about
         assert {x.path for x in built.app.routes if isinstance(x, Route)} == {s.path for s in specs}
         assert len(built.app.routes) == len(specs)           # one Starlette route per Spec, nothing extra mounted
@@ -103,6 +106,8 @@ async def test_without_a_session_nothing_is_served_except_the_shell(tmp_path):
                 resp = await r.c.request(m, fill(s.path), headers=h, content="{}" if m == "POST" else None)
                 if m == "GET" and s.path in PUBLIC_GETS:
                     assert resp.status_code == 200, s.path
+                elif m == "GET" and s.path in STATE_AUTH_GETS:
+                    assert resp.status_code == 400, s.path                              # no valid state: refused
                 elif s.path in admin.PRE_AUTH:
                     assert resp.status_code in (400, 401, 403, 409, 429), s.path        # needs a credential in the body
                 else:

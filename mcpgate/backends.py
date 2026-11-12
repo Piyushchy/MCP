@@ -48,9 +48,10 @@ class ToolInfo:
 
 
 class Backend:
-    def __init__(self, cfg: BackendConfig, start_timeout: float = 30.0, secrets=None):
+    def __init__(self, cfg: BackendConfig, start_timeout: float = 30.0, secrets=None, oauth=None):
         self.cfg = cfg
         self.secrets = secrets
+        self.oauth = oauth   # backend_oauth.BackendOAuth, for servers that ask the owner to sign in
         self.start_timeout = start_timeout
         self.session: ClientSession | None = None
         self.error: str = ""
@@ -119,13 +120,14 @@ class Backend:
                     read, write = await stack.enter_async_context(stdio_client(params, errlog=_errlog()))
                 elif cfg.transport == "http":
                     client = await stack.enter_async_context(httpx.AsyncClient(
+                        auth=self._signin(ex(cfg.url)),
                         headers={k: ex(v) for k, v in cfg.headers.items()},
                         timeout=httpx.Timeout(30.0, read=300.0), follow_redirects=False))
                     read, write, _ = await stack.enter_async_context(
                         streamable_http_client(ex(cfg.url), http_client=client))
                 else:
                     read, write = await stack.enter_async_context(sse_client(
-                        ex(cfg.url), headers={k: ex(v) for k, v in cfg.headers.items()} or None))
+                        ex(cfg.url), headers={k: ex(v) for k, v in cfg.headers.items()} or None, auth=self._signin(ex(cfg.url))))
                 session = await stack.enter_async_context(ClientSession(read, write))
                 try:
                     await asyncio.wait_for(session.initialize(), self.start_timeout)
@@ -147,6 +149,13 @@ class Backend:
         finally:
             self.session = None
             self._ready.set()
+
+    def _signin(self, url: str):
+        if self.cfg.auth != "oauth":
+            return None
+        if self.oauth is None:
+            raise ConfigError("sign-in is not available in this run")
+        return self.oauth.provider(self.name, url)
 
     def _clean(self, text: str) -> str:
         return self.secrets.scrub(text) if self.secrets else text

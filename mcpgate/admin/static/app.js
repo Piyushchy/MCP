@@ -244,6 +244,7 @@ function backendCard(b, reload) {
       if (r.ok) { delete notes[b.name]; reload(); } else say(r.body.error || "Failed.", true);
     }, "danger"));
   }
+  if (b.auth === "oauth") buttons.unshift(...signInButtons(b, btn, say, reload));
   const editBox = el("div", {});
   if (!b.readonly) {
     buttons.unshift(btn("Edit", async () => {
@@ -270,10 +271,42 @@ function backendCard(b, reload) {
     b.description ? el("p", {}, b.description) : "",
     el("p", { class: "muted" }, meta), el("p", { class: "muted" }, tools + (secrets ? " · " + secrets : "")),
     b.path ? el("p", { class: "muted" }, "File: " + b.path + " (drop-in, managed as a file)") : "",
+    b.auth === "oauth" ? el("p", { class: "muted" }, "Sign-in: " + (b.signed_in ? "signed in" : b.signing_in ? "waiting for you to finish in the other tab" : "not signed in")) : "",
     b.error ? el("p", { class: "msg" }, b.error, b.error_hint ? el("br") : "", b.error_hint ? el("span", { class: "muted" }, b.error_hint) : "") : "",
     el("div", { class: "row" }, ...buttons), note, editBox, panelBox);
 }
 
+
+// ---- signing in to a backend with an account --------------------------------------------------------------
+// Some servers (Notion, Linear, Colab ...) have no token to paste: they send you to their own page to log in. mcpgate
+// starts that, opens the page, then polls until the sign-in has finished. The login token never reaches this page.
+function signInButtons(b, btn, say, reload) {
+  const out = [];
+  out.push(btn(b.signed_in ? "Sign in again" : "Sign in", async () => {
+    say("Starting sign-in…");
+    const r = await act(`/api/backends/${b.name}/signin`);
+    if (!r.ok) return say(r.body.error || "Could not start sign-in.", true);
+    if (r.body.already) { say("Already signed in."); return reload(); }
+    const link = el("a", { href: r.body.url, target: "_blank", rel: "noopener noreferrer" }, "Open the sign-in page");
+    const note = document.querySelector(`article[data-name="${b.name}"] p[role=status]`);
+    if (note) { note.className = "note"; note.replaceChildren("Finish signing in in the new tab. If nothing opened, ", link, ". It returns to ", el("code", {}, r.body.redirect_uri), " on this computer, so over SSH forward that same port."); }
+    window.open(r.body.url, "_blank", "noopener,noreferrer");
+    for (let i = 0; i < 150; i++) {
+      await new Promise((ok) => setTimeout(ok, 2000));
+      const l = await api("/api/backends");
+      const me = l.ok && (l.body.backends || []).find((x) => x.name === b.name);
+      if (me && me.signed_in) { say("Signed in."); return reload(); }
+      if (me && !me.signing_in && i > 2) break;
+    }
+    say("Sign-in did not finish. Press Sign in to try again.", true);
+  }));
+  if (b.signed_in) out.push(btn("Sign out", async () => {
+    if (!window.confirm(`Sign out of "${b.name}"? mcpgate forgets the stored login.`)) return;
+    const r = await act(`/api/backends/${b.name}/signout`);
+    if (r.ok) { say(""); reload(); } else say(r.body.error || "Failed.", true);
+  }, "danger"));
+  return out;
+}
 
 // ---- credentials, editing a backend ---------------------------------------------------------------
 // A credential is something mcpgate uses to sign in to a backend (a GitHub token, an API key). The page can store or
@@ -353,7 +386,7 @@ function editPanel(b, reload) {
     const f = el("form", { class: "block" }, el("h4", {}, "Settings"));
     const text = (label, name, value, extra = {}) => field(label, name + "-" + b.name, "text", { name, value: value || "", autocomplete: "off", required: null, ...extra });
     f.append(text("Description", "description", v.description));
-    let headers = null, env = null;
+    let headers = null, env = null, authBox = null;
     if (!v.preset) {
       if (v.runs_program) {
         f.append(text("Command", "command", v.command, { required: "" }));
@@ -366,6 +399,9 @@ function editPanel(b, reload) {
         f.append(text("Address (URL)", "url", v.url, { required: "" }));
         headers = editRows("Request headers (for example Authorization)", "Header", v.headers);
         f.append(headers.node);
+        authBox = el("input", { type: "checkbox", id: "f-auth-" + b.name, name: "auth" });
+        authBox.checked = v.auth === "oauth";
+        f.append(el("div", { class: "field check" }, authBox, el("label", { for: "f-auth-" + b.name }, "This server needs me to sign in with an account (no token)")));
       }
       f.append(text("Start timeout, seconds", "start_timeout", String(v.start_timeout), { inputmode: "numeric" }));
     }
@@ -379,7 +415,7 @@ function editPanel(b, reload) {
       if (!v.preset) {
         data.start_timeout = Number(fd.get("start_timeout")) || undefined;
         if (v.runs_program) { data.command = fd.get("command"); data.args = String(fd.get("args")).split("\n").map((x) => x.trim()).filter(Boolean); data.cwd = fd.get("cwd"); data.env = env.get(); }
-        else { data.url = fd.get("url"); data.headers = headers.get(); }
+        else { data.url = fd.get("url"); data.headers = headers.get(); data.auth = authBox.checked ? "oauth" : ""; }
       }
       save.disabled = true;
       const res = await act(`/api/backends/${b.name}/edit`, data);
@@ -542,11 +578,14 @@ async function addSection(reloadList, goSettings, onAdded) {
     const headers = rowsEditor("Headers (for example Authorization). Tick “secret” for anything private.", "Header");
     const sel = el("select", { name: "transport", id: "f-transport" }, el("option", { value: "http" }, "HTTP (streamable)"), el("option", { value: "sse" }, "SSE"));
     const msg = el("p", { class: "msg", role: "alert" });
+    const signin = el("input", { type: "checkbox", id: "f-auth", name: "auth" });
     const f = el("form", { class: "card" }, el("h3", {}, "Remote MCP server"), el("p", { class: "muted" }, "Any MCP server reachable by a web address. It must be https, except localhost."),
       textField("Name", "name"), el("div", { class: "field" }, el("label", { for: "f-transport" }, "Transport"), sel), textField("Address (URL)", "url", { placeholder: "https://example.com/mcp" }),
-      textField("Description (optional)", "description", { required: null }), textField("Start timeout, seconds", "start_timeout", { value: "30", inputmode: "numeric" }), headers.node,
-      el("button", { type: "submit" }, "Review"), msg);
-    const payload = () => { const fd = new FormData(f); return { kind: "remote", name: fd.get("name"), transport: fd.get("transport"), url: fd.get("url"), description: fd.get("description"), start_timeout: Number(fd.get("start_timeout")) || undefined, headers: headers.get() }; };
+      textField("Description (optional)", "description", { required: null }), textField("Start timeout, seconds", "start_timeout", { value: "30", inputmode: "numeric" }),
+      el("div", { class: "field check" }, signin, el("label", { for: "f-auth" }, "This server needs me to sign in with an account (no token)")),
+      el("p", { class: "muted" }, "Tick this for services that ask you to log in or approve access in a browser. After adding it, press Sign in on its card."),
+      headers.node, el("button", { type: "submit" }, "Review"), msg);
+    const payload = () => { const fd = new FormData(f); return { kind: "remote", name: fd.get("name"), transport: fd.get("transport"), url: fd.get("url"), description: fd.get("description"), start_timeout: Number(fd.get("start_timeout")) || undefined, headers: headers.get(), auth: signin.checked ? "oauth" : "" }; };
     f.addEventListener("submit", async (ev) => { ev.preventDefault(); msg.textContent = ""; await reviewScreen(payload, f, (t) => { msg.textContent = t; })(); });
     return f;
   }

@@ -44,7 +44,7 @@ class Plan:
     def view(self) -> dict:
         b = self.backend
         target = b.url if b.transport != "stdio" else " ".join([b.command, *b.args])
-        return {"name": b.name, "kind": self.kind, "preset": b.preset, "transport": b.transport, "target": target,
+        return {"name": b.name, "kind": self.kind, "preset": b.preset, "auth": b.auth, "transport": b.transport, "target": target,
                 "runs_program": self.runs_program, "description": b.description, "start_timeout": b.start_timeout,
                 "cwd": b.cwd, "headers": [{"name": k, "value": v} for k, v in b.headers.items()],
                 "env": [{"name": k, "value": v} for k, v in b.env.items()],
@@ -172,6 +172,10 @@ class Builder:
                     description=_text(d.get("description"), "the description", 200, required=False),
                     start_timeout=_number(d.get("start_timeout"), "the start timeout", 30.0))
         plan = Plan(b, kind="remote")
+        auth = d.get("auth", "")
+        if auth not in ("", "oauth"):
+            raise AuthError(400, "auth must be oauth or left out")
+        b.auth = auth
         b.headers = self.rows(plan, d.get("headers"), "header", HEADER_RE, 30)
         return self.finish(plan)
 

@@ -6,6 +6,7 @@ import hashlib
 import json
 import secrets
 import time
+from pathlib import Path
 
 from mcp.types import ContentBlock, ImageContent, TextContent
 
@@ -26,11 +27,17 @@ class GatewayError(Exception):
 
 
 class Hub:
-    def __init__(self, settings: Settings, secrets=None):
+    def __init__(self, settings: Settings, secrets=None, oauth=None):
         self.settings = settings
+        if oauth is None:
+            from .backend_oauth import BackendOAuth
+            from .config import config_path
+            base = Path(secrets.path).parent if secrets is not None and getattr(secrets, "path", None) else config_path().parent
+            oauth = BackendOAuth(base / "backend_oauth.json", lambda: f"http://127.0.0.1:{self.settings.server.admin_port}/oauth/callback")
+        self.oauth = oauth
         self.secrets = secrets   # optional SecretStore for ${NAME} values the environment lacks
         self._secret_fp = secrets.fingerprints() if secrets else {}
-        self.backends: dict[str, Backend] = {n: Backend(c, start_timeout=c.start_timeout, secrets=secrets) for n, c in settings.backends.items()}
+        self.backends: dict[str, Backend] = {n: Backend(c, start_timeout=c.start_timeout, secrets=secrets, oauth=oauth) for n, c in settings.backends.items()}
         self.policies = {n: Policy(c.allow, c.deny, c.confirm) for n, c in settings.backends.items()}
         self.store = ResultStore()
         self.approvals = None   # set by the long-running service: risky calls then wait for the owner in the admin UI
@@ -72,11 +79,11 @@ class Hub:
             for name, cfg in new.backends.items():
                 cur = old.get(name)
                 if cur is None:
-                    kept[name] = Backend(cfg, start_timeout=cfg.start_timeout, secrets=self.secrets)
+                    kept[name] = Backend(cfg, start_timeout=cfg.start_timeout, secrets=self.secrets, oauth=self.oauth)
                     added.append(name)
                 elif cur.cfg.connection_key() != cfg.connection_key():
                     stopping.append(cur)
-                    kept[name] = Backend(cfg, start_timeout=cfg.start_timeout, secrets=self.secrets)
+                    kept[name] = Backend(cfg, start_timeout=cfg.start_timeout, secrets=self.secrets, oauth=self.oauth)
                     restarted.append(name)
                 else:
                     if (cur.cfg.allow, cur.cfg.deny, cur.cfg.confirm) != (cfg.allow, cfg.deny, cfg.confirm):

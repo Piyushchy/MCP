@@ -31,6 +31,8 @@ def explain(err, command: str = "") -> tuple[str, str]:
                 "Install it first (for example uv for uvx, or Node.js for npx), or check how the command is spelled.")
     if any(isinstance(x, PermissionError) for x in found) or "permission denied" in text:
         return f"This computer would not let mcpgate run {name} (permission denied).", "Check that the file is executable and that you own it."
+    if "sign-in needed" in text or any(type(x).__name__ == "SignInRequired" for x in found):
+        return "This server needs you to sign in.", "Open Backends, find this server and press Sign in."
     code = _status(text, found)
     if code == 401:
         return "The server did not accept the token (401 Unauthorized).", "Check that the token is correct, has not expired, and was pasted in full. You can enter it again."

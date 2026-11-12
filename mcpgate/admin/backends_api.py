@@ -41,6 +41,8 @@ def row(ctx: AdminContext, b) -> dict:
         "readonly": cfg.source == "custom", "start_timeout": cfg.start_timeout,
         "secrets": [{"name": n, "set": ctx.secrets.has(n)} for n in sorted(cfg.secret_refs())],
         "has_policy": bool(cfg.deny or cfg.confirm or cfg.allow != ["*"]),
+        "auth": cfg.auth, "signed_in": ctx.hub.oauth.signed_in(b.name) if cfg.auth == "oauth" else None,
+        "signing_in": ctx.hub.oauth.pending(b.name) if cfg.auth == "oauth" else False,
     }
 
 
@@ -233,8 +235,9 @@ def routes(ctx: AdminContext) -> list[Spec]:
                   secrets_stored=sorted(secrets), restarted=restarted)
         return JSONResponse({"backend": row(ctx, ctx.hub.backends[b.name])})
 
+    from . import signin_api
     P = "/api/backends/{name}"
-    return [
+    return signin_api.routes(ctx, find) + [
         Spec("/api/backends", ("GET",), listing),
         Spec("/api/presets", ("GET",), preset_list),
         Spec("/api/backends/preview", ("POST",), preview, csrf=True),

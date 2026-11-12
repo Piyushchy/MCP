@@ -211,6 +211,15 @@ own process under the name of the file, so a crash or bad import cannot take the
 the file is executed to discover it; the first docstring line is its description. A file starting with `_`
 is ignored, which is how you switch one off. An entry in `config.toml` with the same name wins over a file.
 
+## Backends that need an account, not a token
+
+Some servers (Notion, Linear and others) have no token to paste: they send you to their own page to log in. Add a
+*Remote server* in the admin UI, tick **This server needs me to sign in with an account**, then press **Sign in** on
+its card. mcpgate registers itself with that server, opens its sign-in page, and keeps the resulting login in
+`backend_oauth.json` (mode 600, next to `secrets.json`), refreshing it by itself. The login is never shown on the
+page or written to logs. **Sign out** forgets it. In `config.toml` it is `auth = "oauth"` on an `http` or `sse`
+backend. For a server that does want a token, leave the box unticked and store the token as a header secret.
+
 ## Approvals
 
 For a tool in `confirm` (or marked destructive) the call is held until you approve it.
@@ -238,6 +247,7 @@ or Cloudflare steps for your address under "Show setup instructions".
 **From the terminal instead:**
 
 ```bash
+tailscale funnel status                          # first look: is Funnel already used for something else?
 sudo tailscale funnel --bg 8766                  # gives you https://your-machine.your-tailnet.ts.net
 mcpgate auth passphrase                          # asks for the passphrase you will type on the approval page
 mcpgate serve --http --port 8766 \
@@ -253,7 +263,8 @@ identifies itself, choose **Register automatically**), and click **Connect**. Yo
 approval page; type the passphrase and press **Approve**. From then on Claude holds short-lived tokens and
 you do not sign in again (they refresh by themselves, and survive a gateway restart).
 
-**Funnel when you already use it for something else.** Funnel offers three public ports (443, 8443, 10000).
+**Funnel when you already use it for something else.** `sudo tailscale funnel --bg 8766` publishes on port 443 and
+*replaces* whatever Funnel already serves there, so run `tailscale funnel status` first. Funnel offers three public ports (443, 8443, 10000).
 If one is taken (say 443), use another for the gateway: `sudo tailscale funnel --bg --https=8443 8766`, and use
 `https://your-machine.your-tailnet.ts.net:8443` as `--public-url` (keep `--allow-host` as the bare host name).
 `tailscale funnel status` lists what is published. A shared address with the gateway under a path does not
@@ -347,7 +358,10 @@ replaced with `***`; long strings are shortened; the file is created mode 600. S
 - Results returned by a backend's tools are passed to the model unchanged. Stored secrets are scrubbed from
   errors, logs and the audit log, but not from what a tool legitimately returns.
 - Only **tools** are proxied. Resources, prompts, sampling and notifications from backends are not forwarded.
-- Remote *backends* authenticate with static headers; the gateway cannot yet sign in to a backend that requires OAuth.
+- Signing in to a backend with an account (OAuth) is tested end to end against a local OAuth server only, not
+  against Notion, Linear, Colab or any other real service. The sign-in page of a service must be able to send your
+  browser back to `http://127.0.0.1:<admin port>/oauth/callback`, which works on the computer that runs mcpgate (and
+  over SSH if you forward the admin port with the same number on both sides).
 - Remote access has one owner: one passphrase, one static token. No per-user accounts or per-client permissions.
 - OAuth and the Funnel/Cloudflare setup are tested end to end against local servers, but **not against the real
   claude.ai**, and the GitHub and Google Colab presets have not been run against the real services.

@@ -16,7 +16,7 @@ from .addbackend import (ENVNAME_RE, HEADER_RE, MAX_VALUE, PRESET_LOCKED, SECRET
 from .session import AuthError
 
 PRESET_EDITABLE = {"description", "set_secrets"}
-EDITABLE = {"description", "start_timeout", "url", "headers", "command", "args", "cwd", "env", "set_secrets"}
+EDITABLE = {"description", "start_timeout", "url", "headers", "auth", "command", "args", "cwd", "env", "set_secrets"}
 EXACT_REF = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
 
 
@@ -31,7 +31,7 @@ def view(ctx, cfg) -> dict:
         return out
     stdio = cfg.transport == "stdio"
     return {"name": cfg.name, "transport": cfg.transport, "preset": cfg.preset, "description": cfg.description,
-            "start_timeout": cfg.start_timeout, "url": cfg.url if not stdio else "", "headers": rows(cfg.headers),
+            "start_timeout": cfg.start_timeout, "auth": cfg.auth, "url": cfg.url if not stdio else "", "headers": rows(cfg.headers),
             "command": cfg.command, "args": list(cfg.args), "cwd": cfg.cwd, "env": rows(cfg.env),
             "runs_program": stdio, "editable": sorted(PRESET_EDITABLE if cfg.preset else EDITABLE),
             "secrets": [{"name": n, "set": ctx.secrets.has(n)} for n in sorted(cfg.secret_refs())]}
@@ -84,7 +84,7 @@ def plan(ctx, cfg, d: dict) -> tuple[object, dict[str, str], bool]:
         if locked:
             raise AuthError(400, f"a preset's {', '.join(sorted(locked))} cannot be changed; only its description and secrets can")
     stdio = cfg.transport == "stdio"
-    for key in ("url", "headers") if stdio else ("command", "args", "cwd", "env"):
+    for key in ("url", "headers", "auth") if stdio else ("command", "args", "cwd", "env"):
         if key in d:
             raise AuthError(400, f"a {cfg.transport} backend has no {key}")
     new = dataclasses.replace(cfg, args=list(cfg.args), env=dict(cfg.env), headers=dict(cfg.headers), allow=list(cfg.allow),
@@ -101,6 +101,10 @@ def plan(ctx, cfg, d: dict) -> tuple[object, dict[str, str], bool]:
         new.start_timeout = _number(d["start_timeout"], "the start timeout", cfg.start_timeout)
     if "url" in d:
         new.url = _text(d["url"], "the address", 2000)
+    if "auth" in d:
+        if d["auth"] not in ("", "oauth"):
+            raise AuthError(400, "auth must be oauth or left out")
+        new.auth = d["auth"]
     if "headers" in d:
         new.headers = _rows(d["headers"], "header", HEADER_RE, 30, cfg.name, taken, new_secrets)
     if "command" in d:
