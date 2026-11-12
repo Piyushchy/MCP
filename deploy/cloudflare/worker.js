@@ -12,7 +12,7 @@ const GATEWAY_PATHS = ["/mcp", "/.well-known/", "/authorize", "/token", "/regist
 export default {
   async fetch(request) {
     const url = new URL(request.url);
-    const toGateway = GATEWAY_PATHS.some((p) => url.pathname === p || url.pathname.startsWith(p.endsWith("/") ? p : p + "/") || url.pathname === p);
+    const toGateway = GATEWAY_PATHS.some((p) => (p.endsWith("/") ? url.pathname.startsWith(p) : url.pathname === p || url.pathname.startsWith(p + "/")));
     if (toGateway) {
       // pass the request through untouched: method, headers, body and streaming all stay as they are
       return fetch(new Request(GATEWAY + url.pathname + url.search, request), { redirect: "manual" });
