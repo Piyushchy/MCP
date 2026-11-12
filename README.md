@@ -15,6 +15,8 @@ for the tool it needs**, then call it.
                     audit log
 ```
 
+Project site: https://piyushchy.is-a.dev/mcp/ (source in [docs/](docs/index.html)).
+
 ## Why
 
 - **Smaller context.** Ten servers can mean 200+ tool schemas in every request. Here the client sees five tools.
