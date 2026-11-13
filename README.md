@@ -228,7 +228,9 @@ The same pages are also published with GitHub Pages from `docs/` (`https://piyus
 **A name of your own, with the site on GitHub Pages.** A DNS record can point a name at one place only, and Tailscale
 Funnel answers only to its own `ts.net` name, so a custom name such as `mcpgate.is-a.dev` needs a small proxy in front
 that sends `/mcp` and the sign-in paths to your computer and everything else to GitHub Pages. `deploy/vercel/vercel.json`
-is that proxy as a free Vercel project (rewrites only, no code): put it in a project, add your domain to the project, and
+is that proxy as a free Vercel project (rewrites only, no code). It is a template: replace `YOUR-FUNNEL-HOST` with your Funnel
+host (for example `my-laptop.my-tailnet.ts.net`), and `YOUR-PAGES-HOST/YOUR-REPO` with where your Pages site lives (for
+example `your-name.github.io/mcp`). Put it in a project, add your domain to the project, and
 point the domain's `CNAME` at Vercel. Then use that name as the **Public address** and `https://that-name/mcp` in your AI
 app. The cost: Vercel terminates the connection, so it can see the traffic between your AI app and the gateway, including
 sign-ins; Funnel on its own does not. If that is not acceptable, use the `ts.net` address, which already shows the site.

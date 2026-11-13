@@ -1,15 +1,15 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "rewrites": [
-    { "source": "/mcp", "destination": "https://piyush.tail799736.ts.net/mcp" },
-    { "source": "/mcp/:path*", "destination": "https://piyush.tail799736.ts.net/mcp/:path*" },
-    { "source": "/.well-known/:path*", "destination": "https://piyush.tail799736.ts.net/.well-known/:path*" },
-    { "source": "/authorize", "destination": "https://piyush.tail799736.ts.net/authorize" },
-    { "source": "/token", "destination": "https://piyush.tail799736.ts.net/token" },
-    { "source": "/register", "destination": "https://piyush.tail799736.ts.net/register" },
-    { "source": "/revoke", "destination": "https://piyush.tail799736.ts.net/revoke" },
-    { "source": "/consent", "destination": "https://piyush.tail799736.ts.net/consent" },
-    { "source": "/", "destination": "https://piyushchy.is-a.dev/mcp/" },
-    { "source": "/:path*", "destination": "https://piyushchy.is-a.dev/mcp/:path*" }
+    { "source": "/mcp", "destination": "https://YOUR-FUNNEL-HOST/mcp" },
+    { "source": "/mcp/:path*", "destination": "https://YOUR-FUNNEL-HOST/mcp/:path*" },
+    { "source": "/.well-known/:path*", "destination": "https://YOUR-FUNNEL-HOST/.well-known/:path*" },
+    { "source": "/authorize", "destination": "https://YOUR-FUNNEL-HOST/authorize" },
+    { "source": "/token", "destination": "https://YOUR-FUNNEL-HOST/token" },
+    { "source": "/register", "destination": "https://YOUR-FUNNEL-HOST/register" },
+    { "source": "/revoke", "destination": "https://YOUR-FUNNEL-HOST/revoke" },
+    { "source": "/consent", "destination": "https://YOUR-FUNNEL-HOST/consent" },
+    { "source": "/", "destination": "https://YOUR-PAGES-HOST/YOUR-REPO/" },
+    { "source": "/:path*", "destination": "https://YOUR-PAGES-HOST/YOUR-REPO/:path*" }
   ]
 }
