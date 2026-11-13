@@ -77,7 +77,10 @@ def test_public_listener_has_no_admin_paths(tmp_path):
         wait_for(f"http://127.0.0.1:{admin}/api/health", proc)
         base = f"http://127.0.0.1:{port}"
         auth = {"authorization": "Bearer " + "t" * 32}
-        for path in ["/", "/static/app.js", "/static/app.css", "/api/health", "/api/login", "/api/backends", "/admin", "/ui"]:
+        home = httpx.get(base + "/", timeout=3)           # the project site is served here; it is not the admin page
+        assert home.status_code == 200 and "One connection to every MCP server" in home.text and "mcpgate admin" not in home.text
+        assert httpx.post(base + "/", headers=auth, timeout=3).status_code in (401, 404, 405)
+        for path in ["/static/app.js", "/static/app.css", "/api/health", "/api/login", "/api/backends", "/admin", "/ui"]:
             for headers in ({}, auth):   # with and without credentials
                 r = httpx.get(base + path, headers=headers, timeout=3)
                 assert r.status_code in (401, 404), (path, r.status_code)

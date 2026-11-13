@@ -350,11 +350,11 @@ def cmd_serve(args) -> int:
             print(f"Add this URL in claude.ai (Customize > Connectors > Add custom connector): {oauth.public_url}/mcp", file=sys.stderr)
         try:
             if args.service:
-                public = serve.make_http_server(app, host, port, token, oauth is not None, verify)
+                public = serve.make_http_server(app, host, port, token, oauth is not None, verify, srv.site)
                 rl = _reloader(hub, args)
                 serve.run_service(hub, public, _admin(srv, hub, rl, args, running, restarter, **envs), reloader=rl, restarter=restarter)
             else:
-                serve.run_http(app, hub, host, port, token, oauth=oauth is not None, reloader=_reloader(hub, args), verify=verify)
+                serve.run_http(app, hub, host, port, token, oauth=oauth is not None, reloader=_reloader(hub, args), verify=verify, site=srv.site)
         except ValueError as e:
             raise ConfigError(str(e)) from None
     elif args.service:

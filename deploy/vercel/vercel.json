@@ -1,0 +1,15 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "rewrites": [
+    { "source": "/mcp", "destination": "https://piyush.tail799736.ts.net/mcp" },
+    { "source": "/mcp/:path*", "destination": "https://piyush.tail799736.ts.net/mcp/:path*" },
+    { "source": "/.well-known/:path*", "destination": "https://piyush.tail799736.ts.net/.well-known/:path*" },
+    { "source": "/authorize", "destination": "https://piyush.tail799736.ts.net/authorize" },
+    { "source": "/token", "destination": "https://piyush.tail799736.ts.net/token" },
+    { "source": "/register", "destination": "https://piyush.tail799736.ts.net/register" },
+    { "source": "/revoke", "destination": "https://piyush.tail799736.ts.net/revoke" },
+    { "source": "/consent", "destination": "https://piyush.tail799736.ts.net/consent" },
+    { "source": "/", "destination": "https://piyushchy.is-a.dev/mcp/" },
+    { "source": "/:path*", "destination": "https://piyushchy.is-a.dev/mcp/:path*" }
+  ]
+}

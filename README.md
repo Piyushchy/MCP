@@ -215,15 +215,23 @@ is ignored, which is how you switch one off. An entry in `config.toml` with the 
 
 ## One address for the site and the gateway
 
-A DNS record can only point a name at one place, so the project site (GitHub Pages) and your gateway (your computer,
-through a tunnel) cannot share a name by DNS alone. A free Cloudflare Worker can: it answers at one address, sends
-`/mcp` and the sign-in paths to your gateway, and shows the GitHub Pages site for everything else.
-`deploy/cloudflare/worker.js` is that Worker (about twenty lines). Create a free Cloudflare account, open
-Workers & Pages, create a Worker, paste the file (set `GATEWAY` to your Funnel address), deploy, and you get
-`https://NAME.SUBDOMAIN.workers.dev`. Then set that as the **Public address** on the Remote access page, keep the
-tunnel as it is, and use `https://NAME.SUBDOMAIN.workers.dev/mcp` in your AI app. A custom domain on the Worker needs a
-domain you own on Cloudflare; an is-a.dev name cannot be attached to it, but a `URL` record can redirect a browser to it.
-Not tested against a live Cloudflare account.
+Open your public address in a browser and you see the project site. Add `/mcp` and an AI app reaches the gateway on your
+computer. Both come through the same tunnel, so there is nothing to set up and nothing in between: the files of the
+site are part of mcpgate and are served by the same process as the gateway, from the same address, with a strict
+content policy (no inline code, nothing loaded from outside). Only `GET` and `HEAD` for `/` and `/assets/...` are
+answered by the site; every other path, including all of the gateway's, goes on to the gateway untouched, and the admin
+page is still only on `127.0.0.1`. Turn it off with `site = false` under `[server]` in `config.toml`.
+
+The same pages are also published with GitHub Pages from `docs/` (`https://piyushchy.is-a.dev/mcp/`). After changing
+`docs/`, run `python scripts/sync_site.py`; a test fails if the packaged copy differs.
+
+**A name of your own, with the site on GitHub Pages.** A DNS record can point a name at one place only, and Tailscale
+Funnel answers only to its own `ts.net` name, so a custom name such as `mcpgate.is-a.dev` needs a small proxy in front
+that sends `/mcp` and the sign-in paths to your computer and everything else to GitHub Pages. `deploy/vercel/vercel.json`
+is that proxy as a free Vercel project (rewrites only, no code): put it in a project, add your domain to the project, and
+point the domain's `CNAME` at Vercel. Then use that name as the **Public address** and `https://that-name/mcp` in your AI
+app. The cost: Vercel terminates the connection, so it can see the traffic between your AI app and the gateway, including
+sign-ins; Funnel on its own does not. If that is not acceptable, use the `ts.net` address, which already shows the site.
 
 ## Colab
 

@@ -194,6 +194,7 @@ class Server:
     static_token_enabled: bool = False
     allow_custom_commands: bool = True    # the admin UI may add programs that run on this computer (each one asks for the passphrase again)
     wizard_done: bool = False             # the first-run setup guide was finished or skipped
+    site: bool = True                     # show the project site at / on the public address (the gateway stays at /mcp)
 
 
 @dataclass
@@ -211,7 +212,7 @@ class Settings:
 
 _GATEWAY_KEYS = {"cache_ttl", "tools_ttl", "max_result_chars", "audit_log", "audit_max_mb", "audit_keep", "custom_dir"}
 _SERVER_KEYS = {"public_url", "port", "admin_port", "allow_hosts", "oauth_enabled", "oauth_redirect_hosts", "static_token_enabled",
-                "allow_custom_commands", "wizard_done"}
+                "allow_custom_commands", "wizard_done", "site"}
 _BACKEND_KEYS = {"transport", "command", "args", "env", "cwd", "url", "headers", "allow", "deny",
                  "confirm", "enabled", "timeout", "start_timeout", "description", "preset", "auth"}
 
@@ -280,7 +281,7 @@ def parse(data: dict) -> Settings:
             if not all(HOST_RE.match(v) for v in vals):
                 raise ConfigError(f"[server] {key} entries must be bare host names (no scheme, port or path)")
             setattr(s.server, key, vals)
-    for key in ("oauth_enabled", "static_token_enabled", "allow_custom_commands", "wizard_done"):
+    for key in ("oauth_enabled", "static_token_enabled", "allow_custom_commands", "wizard_done", "site"):
         if key in sv:
             if not isinstance(sv[key], bool):
                 raise ConfigError(f"[server] {key} must be true or false")

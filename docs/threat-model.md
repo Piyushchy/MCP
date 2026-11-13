@@ -24,6 +24,11 @@
 - The **admin page** trusts only a person at this computer who knows the admin passphrase.
 - The **public listener** trusts only callers with a valid access token or a sign-in made with the sign-in passphrase.
   It serves the MCP endpoint and the OAuth endpoints and nothing else. The admin code is not mounted on it.
+- **The project site on the public address** (`site = true`, the default). `GET` and `HEAD` for `/` and `/assets/...` answer
+  with files shipped inside the package; nothing is fetched and nothing a visitor sends is used except to pick one of those
+  files (traversal-style paths are refused). The page is served with a policy that allows no inline script and no outside
+  loads. It shares an origin with `/consent`, so a change to the site's script would be a change to code that runs next to the
+  sign-in page: the site's files are reviewed and shipped with mcpgate like any other code, and `site = false` removes it.
 - **`GET /oauth/callback`** on the admin listener is the one admin route without a session: your browser arrives there
   from another site's login page. It accepts only the one-time `state` of a sign-in you started from the admin page (valid
   for five minutes, used once) and answers 400 to anything else. It is loopback-only like the rest. You can only sign in to

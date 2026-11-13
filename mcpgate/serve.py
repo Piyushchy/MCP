@@ -70,7 +70,7 @@ class BearerAuth:
         await send({"type": "http.response.body", "body": body})
 
 
-def make_http_server(app: FastMCP, host: str, port: int, token: str | None, oauth: bool = False, verify=None) -> uvicorn.Server:
+def make_http_server(app: FastMCP, host: str, port: int, token: str | None, oauth: bool = False, verify=None, site: bool = False) -> uvicorn.Server:
     """With ``oauth`` the app itself authenticates (OAuth tokens, plus the static token if one is set),
     and its discovery, authorize and token endpoints must stay reachable, so no blanket wrapper is added."""
     if not token and not verify and not oauth and not is_loopback(host):
@@ -78,6 +78,9 @@ def make_http_server(app: FastMCP, host: str, port: int, token: str | None, oaut
     asgi = app.streamable_http_app()
     if (token or verify) and not oauth:
         asgi = BearerAuth(asgi, token, verify)
+    if site:
+        from .site import SiteFront
+        asgi = SiteFront(asgi)
     return uvicorn.Server(uvicorn.Config(asgi, host=host, port=port, log_level="warning"))
 
 
@@ -94,8 +97,8 @@ def run_stdio(app: FastMCP, hub: Hub, reloader=None) -> None:
     asyncio.run(main())
 
 
-def run_http(app: FastMCP, hub: Hub, host: str, port: int, token: str | None, oauth: bool = False, reloader=None, verify=None) -> None:
-    server = make_http_server(app, host, port, token, oauth, verify)
+def run_http(app: FastMCP, hub: Hub, host: str, port: int, token: str | None, oauth: bool = False, reloader=None, verify=None, site: bool = False) -> None:
+    server = make_http_server(app, host, port, token, oauth, verify, site)
 
     async def main():
         if reloader:
